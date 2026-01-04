@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct ProjectListView: View {
     @StateObject private var viewModel = ProjectScannerViewModel()
@@ -6,12 +7,24 @@ struct ProjectListView: View {
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var searchText = ""
     
+    // Filtering & Sorting
+    @State private var filterOption: FilterOption = .all
+    @State private var sortOption: SortOption = .name
+
     // Selection state handling both Dashboard and Projects
     @State private var selection: SidebarSelection? = .dashboard
 
     enum SidebarSelection: Hashable {
         case dashboard
         case project(Project)
+    }
+    
+    enum FilterOption {
+        case all, clean, changes
+    }
+    
+    enum SortOption {
+        case name, recent
     }
 
     var body: some View {
@@ -34,6 +47,29 @@ struct ProjectListView: View {
                             ForEach(filteredGitRepos) { project in
                                 NavigationLink(value: SidebarSelection.project(project)) {
                                     ProjectRowView(project: project)
+                                        .contextMenu {
+                                            Button {
+                                                NSWorkspace.shared.open(URL(fileURLWithPath: project.path))
+                                            } label: {
+                                                Label("Open in Finder", systemImage: "folder")
+                                            }
+                                            
+                                            Button {
+                                                let script = "tell application \"Terminal\" to do script \"cd '\(project.path)'\""
+                                                NSAppleScript(source: script)?.executeAndReturnError(nil)
+                                            } label: {
+                                                Label("Open in Terminal", systemImage: "terminal")
+                                            }
+                                            
+                                            Divider()
+                                            
+                                            Button {
+                                                NSPasteboard.general.clearContents()
+                                                NSPasteboard.general.setString(project.path, forType: .string)
+                                            } label: {
+                                                Label("Copy Path", systemImage: "doc.on.doc")
+                                            }
+                                        }
                                 }
                             }
                         }
@@ -44,6 +80,29 @@ struct ProjectListView: View {
                             ForEach(filteredNonGit) { project in
                                 NavigationLink(value: SidebarSelection.project(project)) {
                                     ProjectRowView(project: project)
+                                        .contextMenu {
+                                            Button {
+                                                NSWorkspace.shared.open(URL(fileURLWithPath: project.path))
+                                            } label: {
+                                                Label("Open in Finder", systemImage: "folder")
+                                            }
+                                            
+                                            Button {
+                                                let script = "tell application \"Terminal\" to do script \"cd '\(project.path)'\""
+                                                NSAppleScript(source: script)?.executeAndReturnError(nil)
+                                            } label: {
+                                                Label("Open in Terminal", systemImage: "terminal")
+                                            }
+                                            
+                                            Divider()
+                                            
+                                            Button {
+                                                NSPasteboard.general.clearContents()
+                                                NSPasteboard.general.setString(project.path, forType: .string)
+                                            } label: {
+                                                Label("Copy Path", systemImage: "doc.on.doc")
+                                            }
+                                        }
                                 }
                             }
                         }
@@ -58,6 +117,25 @@ struct ProjectListView: View {
                 ToolbarItem(placement: .primaryAction) {
                     Button(action: { showingAddPathSheet = true }) {
                         Label("Add Path", systemImage: "plus")
+                    }
+                }
+                
+                ToolbarItem(placement: .automatic) {
+                    Menu {
+                        Picker("Filter", selection: $filterOption) {
+                            Text("All").tag(FilterOption.all)
+                            Text("Clean").tag(FilterOption.clean)
+                            Text("Changes").tag(FilterOption.changes)
+                        }
+                        
+                        Divider()
+                        
+                        Picker("Sort", selection: $sortOption) {
+                            Text("Name").tag(SortOption.name)
+                            Text("Recent Activity").tag(SortOption.recent)
+                        }
+                    } label: {
+                        Label("Filter & Sort", systemImage: "line.3.horizontal.decrease.circle")
                     }
                 }
                 
@@ -101,17 +179,48 @@ struct ProjectListView: View {
     }
     
     private var filteredGitRepos: [Project] {
-        if searchText.isEmpty {
-            return viewModel.gitRepositories
-        }
-        return viewModel.gitRepositories.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+        processProjects(viewModel.gitRepositories)
     }
     
     private var filteredNonGit: [Project] {
-        if searchText.isEmpty {
-            return viewModel.nonGitProjects
+        processProjects(viewModel.nonGitProjects)
+    }
+    
+    private func processProjects(_ projects: [Project]) -> [Project] {
+        var result = projects
+        
+        // 1. Search
+        if !searchText.isEmpty {
+            result = result.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
         }
-        return viewModel.nonGitProjects.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+        
+        // 2. Filter (Only applicable if we have status, but we apply generically)
+        switch filterOption {
+        case .all:
+            break
+        case .clean:
+            result = result.filter { 
+                // Keep if it has no status (loading) or if it has status and is clean
+                guard let status = $0.gitStatus else { return true }
+                return !status.hasUncommittedChanges 
+            }
+        case .changes:
+            result = result.filter {
+                 guard let status = $0.gitStatus else { return false }
+                 return status.hasUncommittedChanges 
+            }
+        }
+        
+        // 3. Sort
+        switch sortOption {
+        case .name:
+            result.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        case .recent:
+            // If scanning never happened, treat as distant past
+            result.sort { $0.lastScanned > $1.lastScanned }
+        }
+        
+        return result
     }
     
     private var dependencyWarningView: some View {
