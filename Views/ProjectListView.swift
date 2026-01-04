@@ -3,125 +3,170 @@ import SwiftUI
 struct ProjectListView: View {
     @StateObject private var viewModel = ProjectScannerViewModel()
     @State private var showingAddPathSheet = false
-    @State private var selectedProject: Project?
+    @State private var columnVisibility = NavigationSplitViewVisibility.all
+    @State private var searchText = ""
+    
+    // Selection state handling both Dashboard and Projects
+    @State private var selection: SidebarSelection? = .dashboard
+
+    enum SidebarSelection: Hashable {
+        case dashboard
+        case project(Project)
+    }
 
     var body: some View {
-        NavigationSplitView {
-            VStack {
-                // Dependency Warning
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            VStack(spacing: 0) {
+                // Dependency Warning Banner
                 if !viewModel.missingDependencies.isEmpty {
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Missing Dependencies")
+                    dependencyWarningView
+                }
+
+                List(selection: $selection) {
+                    NavigationLink(value: SidebarSelection.dashboard) {
+                        Label("Dashboard", systemImage: "square.grid.2x2")
                             .font(.headline)
-                            .foregroundColor(.red)
-                        
-                        ForEach(viewModel.missingDependencies, id: \.self) { dep in
-                            VStack(alignment: .leading) {
-                                Text(dep.message)
-                                    .font(.caption)
-                                Text(dep.installInstruction)
-                                    .font(.caption2)
-                                    .fontWeight(.bold)
+                            .padding(.vertical, 8)
+                    }
+
+                    if !filteredGitRepos.isEmpty {
+                        Section(header: sectionHeader("Git Repositories", icon: "arrow.triangle.branch", count: filteredGitRepos.count)) {
+                            ForEach(filteredGitRepos) { project in
+                                NavigationLink(value: SidebarSelection.project(project)) {
+                                    ProjectRowView(project: project)
+                                }
                             }
-                            .padding(.vertical, 2)
                         }
                     }
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(Color.red.opacity(0.1))
-                    .cornerRadius(8)
-                    .padding(.horizontal)
+
+                    if !filteredNonGit.isEmpty {
+                        Section(header: sectionHeader("Other Projects", icon: "folder", count: filteredNonGit.count)) {
+                            ForEach(filteredNonGit) { project in
+                                NavigationLink(value: SidebarSelection.project(project)) {
+                                    ProjectRowView(project: project)
+                                }
+                            }
+                        }
+                    }
                 }
-
-                // Sidebar with project categories
-                List(selection: $selectedProject) {
-                    Section("Git Repositories") {
-                        ForEach(viewModel.gitRepositories) { project in
-                            ProjectRowView(project: project)
-                                .tag(project)
+                .listStyle(.sidebar)
+                .searchable(text: $searchText, placement: .sidebar, prompt: "Search projects...")
+                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: viewModel.projects)
+            }
+            .navigationTitle("GitMonitor")
+            .toolbar {
+                ToolbarItem(placement: .primaryAction) {
+                    Button(action: { showingAddPathSheet = true }) {
+                        Label("Add Path", systemImage: "plus")
+                    }
+                }
+                
+                ToolbarItem(placement: .automatic) {
+                    Button(action: {
+                        Task { await viewModel.scanAllProjects() }
+                    }) {
+                        if viewModel.isScanning {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Label("Scan", systemImage: "arrow.clockwise")
                         }
                     }
-
-                    Section("Non-Git Projects") {
-                        ForEach(viewModel.nonGitProjects) { project in
-                            ProjectRowView(project: project)
-                                .tag(project)
-                        }
-                    }
+                    .disabled(viewModel.isScanning)
                 }
             }
-            .navigationSplitViewColumnWidth(min: 250, ideal: 350)
-
+            .sheet(isPresented: $showingAddPathSheet) {
+                AddPathSheet(viewModel: viewModel)
+            }
+            .alert("Error", isPresented: .constant(viewModel.errorMessage != nil)) {
+                Button("OK") { viewModel.errorMessage = nil }
+            } message: {
+                if let errorMessage = viewModel.errorMessage { Text(errorMessage) }
+            }
+            .onAppear {
+                Task { await viewModel.checkDependencies() }
+            }
+        
         } detail: {
-            // Detail view
-            if let project = selectedProject {
-                ProjectDetailView(
-                    project: project,
-                    onRefresh: {
-                        Task {
-                            await viewModel.refreshProjectStatus(project)
-                        }
-                    }
-                )
-            } else {
-                VStack(spacing: 20) {
-                    Image(systemName: "folder.badge.gearshape")
-                        .font(.system(size: 60))
-                        .foregroundColor(.secondary)
-
-                    Text("Select a project to view details")
-                        .font(.title2)
-                        .foregroundColor(.secondary)
-
-                    Text("Add paths to monitor your projects")
-                        .font(.body)
-                        .foregroundColor(.secondary)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            switch selection {
+            case .dashboard:
+                DashboardView(projects: viewModel.projects)
+            case .project(let project):
+                ProjectDetailView(project: project, onRefresh: {
+                    Task { await viewModel.refreshProjectStatus(project) }
+                })
+            case nil:
+                emptyStateView
             }
         }
-        .navigationTitle("GitMonitor")
-        .toolbar {
-            ToolbarItemGroup(placement: .automatic) {
-                Button(action: {
-                    Task {
-                        await viewModel.scanAllProjects()
-                    }
-                }) {
-                    if viewModel.isScanning {
-                        ProgressView()
-                        .controlSize(.small)
-                    } else {
-                        Label("Scan", systemImage: "arrow.clockwise")
-                    }
-                }
-                .disabled(viewModel.isScanning)
-
-                Spacer()
-
-                Button(action: {
-                    showingAddPathSheet = true
-                }) {
-                    Label("Add Path", systemImage: "plus")
-                }
+    }
+    
+    private var filteredGitRepos: [Project] {
+        if searchText.isEmpty {
+            return viewModel.gitRepositories
+        }
+        return viewModel.gitRepositories.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    }
+    
+    private var filteredNonGit: [Project] {
+        if searchText.isEmpty {
+            return viewModel.nonGitProjects
+        }
+        return viewModel.nonGitProjects.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    }
+    
+    private var dependencyWarningView: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Label("Missing Tools", systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+                .foregroundColor(.white)
+            
+            ForEach(viewModel.missingDependencies, id: \.self) { dep in
+                Text(dep.message)
+                    .font(.caption)
+                    .foregroundColor(.white.opacity(0.9))
             }
         }
-        .sheet(isPresented: $showingAddPathSheet) {
-            AddPathSheet(viewModel: viewModel)
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.red)
+    }
+    
+    private func sectionHeader(_ title: String, icon: String, count: Int) -> some View {
+        HStack {
+            Image(systemName: icon)
+            Text(title)
+            Spacer()
+            Text("\(count)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Color.secondary.opacity(0.1))
+                .cornerRadius(10)
         }
-        .alert("Error", isPresented: .constant(viewModel.errorMessage != nil)) {
-            Button("OK") {
-                viewModel.errorMessage = nil
+        .font(.subheadline)
+        .foregroundColor(.primary)
+    }
+    
+    private var emptyStateView: some View {
+        VStack(spacing: 24) {
+            Image(systemName: "square.stack.3d.up")
+                .font(.system(size: 64))
+                .foregroundColor(.secondary.opacity(0.5))
+            
+            VStack(spacing: 8) {
+                Text("No Project Selected")
+                    .font(.title2)
+                    .fontWeight(.medium)
+                Text("Select a project from the sidebar to view details.")
+                    .foregroundColor(.secondary)
             }
-        } message: {
-            if let errorMessage = viewModel.errorMessage {
-                Text(errorMessage)
+            
+            Button("Add Monitored Path") {
+                showingAddPathSheet = true
             }
-        }
-        .onAppear {
-            Task {
-                await viewModel.checkDependencies()
-            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
         }
     }
 }
@@ -131,66 +176,120 @@ struct ProjectRowView: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            // Status indicator
-            Circle()
-                .fill(statusColor)
-                .frame(width: 8, height: 8)
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(project.name)
-                    .font(.headline)
-
-                if let status = project.gitStatus {
-                    HStack(spacing: 8) {
-                        Image(systemName: "git.branch")
-                            .font(.caption)
-                        Text(status.currentBranch)
-                            .font(.caption)
-                            .foregroundColor(.secondary)
-
-                        if status.hasUncommittedChanges {
-                            Image(systemName: "circle.fill")
-                                .font(.system(size: 6))
-                                .foregroundColor(.orange)
-                            Text("Uncommitted changes")
-                                .font(.caption)
-                                .foregroundColor(.orange)
-                        }
-
-                        if status.pendingPullRequests > 0 {
-                            Image(systemName: "arrow.triangle.pull")
-                                .font(.caption)
-                            Text("\(status.pendingPullRequests) PR(s)")
-                                .font(.caption)
-                                .foregroundColor(.blue)
-                        }
-                    }
-                } else {
-                    Text("Not a Git repository")
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
+            // Icon Container
+            ZStack {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(backgroundColor)
+                    .frame(width: 36, height: 36)
+                
+                Image(systemName: iconName)
+                    .font(.system(size: 16))
+                    .foregroundColor(iconColor)
             }
 
+            VStack(alignment: .leading, spacing: 3) {
+                HStack {
+                    Text(project.name)
+                        .font(.body)
+                        .fontWeight(.medium)
+                        .foregroundColor(.primary)
+                    
+                    if let status = project.gitStatus, status.hasGitHubRemote {
+                        Image(systemName: "cloud.fill")
+                            .font(.system(size: 10))
+                            .foregroundColor(.secondary)
+                    }
+                }
+                
+                HStack {
+                    statusText
+                    Spacer()
+                    // Relative Timestamp
+                    if project.isGitRepository {
+                        Text(relativeTime(project.lastScanned))
+                            .font(.caption2)
+                            .foregroundColor(.secondary.opacity(0.7))
+                    }
+                }
+            }
+            
             Spacer()
         }
         .padding(.vertical, 4)
     }
+    
+    @ViewBuilder
+    private var statusText: some View {
+        if let status = project.gitStatus {
+            HStack(spacing: 6) {
+                Text(status.currentBranch)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .prefixIcon("arrow.triangle.branch")
+                
+                if status.hasUncommittedChanges {
+                    Text("•")
+                        .foregroundColor(.secondary)
+                    Text("Modified")
+                        .font(.caption)
+                        .foregroundColor(.orange)
+                }
+                
+                if status.pendingPullRequests > 0 {
+                    Text("•")
+                        .foregroundColor(.secondary)
+                    Text("\(status.pendingPullRequests) PRs")
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                }
+            }
+        } else if project.isGitRepository {
+            Text("Loading status...")
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .italic()
+        } else {
+            Text("Local Folder")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+    }
 
-    private var statusColor: Color {
+    private func relativeTime(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private var iconName: String {
         guard let status = project.gitStatus else {
-            return .gray
+            return project.isGitRepository ? "arrow.triangle.2.circlepath" : "folder"
         }
-
-        if status.hasUncommittedChanges {
-            return .orange
+        if status.hasUncommittedChanges { return "pencil" }
+        if status.pendingPullRequests > 0 { return "arrow.triangle.pull" }
+        return "checkmark"
+    }
+    
+    private var iconColor: Color {
+        guard let status = project.gitStatus else {
+            return .secondary
         }
-
-        if status.pendingPullRequests > 0 {
-            return .blue
-        }
-
+        if status.hasUncommittedChanges { return .orange }
+        if status.pendingPullRequests > 0 { return .blue }
         return .green
+    }
+    
+    private var backgroundColor: Color {
+        iconColor.opacity(0.15)
+    }
+}
+
+extension View {
+    func prefixIcon(_ name: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: name)
+            self
+        }
     }
 }
 

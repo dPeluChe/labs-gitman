@@ -12,6 +12,28 @@ actor GitService {
         return fileManager.fileExists(atPath: gitPath)
     }
 
+    // MARK: - GitHub Detection
+
+    func isGitHubRepository(at path: String) async -> Bool {
+        // First check if it's a git repo
+        guard isGitRepository(at: path) else { return false }
+
+        // Resolve git path
+        let gitCheck = await isCommandAvailable("git")
+        guard gitCheck.isAvailable, let gitPath = gitCheck.path else { return false }
+
+        do {
+            let output = try await processExecutor.execute(
+                command: gitPath,
+                arguments: ["remote", "-v"],
+                directory: path
+            )
+            return output.contains("github.com")
+        } catch {
+            return false
+        }
+    }
+
     // MARK: - Dependency Checking
 
     /// Checks if required tools are installed and accessible
@@ -118,6 +140,9 @@ actor GitService {
             staged,
             lastCommit
         )
+        
+        // Check GitHub integration
+        let isGitHub = await isGitHubRepository(at: project.path)
 
         // Check for pull requests if GitHub CLI is available
         let prCount = await getPendingPullRequestCount(path: project.path)
@@ -130,7 +155,8 @@ actor GitService {
             stagedFiles: stagedFiles,
             pendingPullRequests: prCount,
             lastCommitHash: commit.hash,
-            lastCommitMessage: commit.message
+            lastCommitMessage: commit.message,
+            hasGitHubRemote: isGitHub
         )
     }
 

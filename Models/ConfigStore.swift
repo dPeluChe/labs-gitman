@@ -1,4 +1,5 @@
 import Foundation
+import OSLog
 
 /// Persistent storage for application configuration
 @MainActor
@@ -8,6 +9,7 @@ class ConfigStore: ObservableObject {
 
     private let pathsKey = "monitoredPaths"
     private let fileManager = FileManager.default
+    private let logger = Logger(subsystem: "com.gitmonitor", category: "ConfigStore")
 
     // UserDefaults persistence
     private let defaults = UserDefaults.standard
@@ -46,6 +48,7 @@ class ConfigStore: ObservableObject {
         var discoveredProjects: [Project] = []
 
         for path in monitoredPaths {
+            logger.info("Scanning monitored path: \(path)")
             let projectsInPath = await scanPathForProjects(path)
             discoveredProjects.append(contentsOf: projectsInPath)
         }
@@ -53,7 +56,16 @@ class ConfigStore: ObservableObject {
         // Merge with existing projects (update if exists, add if new)
         for project in discoveredProjects {
             if let index = projects.firstIndex(where: { $0.path == project.path }) {
-                projects[index] = project
+                // Keep existing git status if not updated yet, but update basic info
+                var updated = project
+                if let existing = projects[index].gitStatus {
+                    updated.gitStatus = existing
+                }
+                // Important: If we just detected it IS a git repo, ensure that sticks
+                if project.isGitRepository {
+                    updated.isGitRepository = true
+                }
+                projects[index] = updated
             } else {
                 projects.append(project)
             }
@@ -63,7 +75,8 @@ class ConfigStore: ObservableObject {
         projects.removeAll { project in
             !discoveredProjects.contains(where: { $0.path == project.path })
         }
-
+        
+        logger.info("Total projects after scan: \(self.projects.count)")
         return projects
     }
 
@@ -72,13 +85,16 @@ class ConfigStore: ObservableObject {
 
         guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
+            logger.error("Path does not exist or is not directory: \(path)")
             return []
         }
 
         // If the path itself is a git repo, return it as a project
         let gitPath = (path as NSString).appendingPathComponent(".git")
         if fileManager.fileExists(atPath: gitPath) {
-            let project = Project(path: path)
+            logger.info("Found git repo at root: \(path)")
+            var project = Project(path: path)
+            project.isGitRepository = true
             return [project]
         }
 
@@ -88,6 +104,7 @@ class ConfigStore: ObservableObject {
         guard let contents = try? fileManager.contentsOfDirectory(
             atPath: path
         ) else {
+            logger.error("Failed to list contents of: \(path)")
             return []
         }
 
@@ -107,6 +124,12 @@ class ConfigStore: ObservableObject {
 
             let itemGitPath = (itemPath as NSString).appendingPathComponent(".git")
             if fileManager.fileExists(atPath: itemGitPath) {
+                logger.info("Found submodule/repo: \(itemPath)")
+                var project = Project(path: itemPath)
+                project.isGitRepository = true
+                projects.append(project)
+            } else {
+                // Keep as non-git project
                 let project = Project(path: itemPath)
                 projects.append(project)
             }

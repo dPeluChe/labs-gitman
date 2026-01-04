@@ -16,7 +16,14 @@ let package = Package(
         .executableTarget(
             name: "GitMonitor",
             path: ".",
-            exclude: ["Package.swift", "README.md"],
+            exclude: [
+                "Package.swift",
+                "README.md",
+                "run.sh",
+                "docs",
+                "Tests",
+                "Resources/Info.plist"
+            ],
             sources: [
                 "Models",
                 "ViewModels",

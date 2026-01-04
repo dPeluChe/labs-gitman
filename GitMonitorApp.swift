@@ -3,25 +3,25 @@ import SwiftUI
 @main
 struct GitMonitorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
+    @StateObject private var themeManager = ThemeManager()
 
     var body: some Scene {
         WindowGroup {
             ProjectListView()
+                .environmentObject(themeManager)
+                .preferredColorScheme(themeManager.currentTheme.colorScheme)
         }
         .windowStyle(.hiddenTitleBar)
         .defaultSize(width: 1200, height: 800)
 
         Settings {
-            SettingsView()
+            SettingsView(themeManager: themeManager)
         }
     }
 }
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Configure app appearance
-        NSApp.appearance = NSAppearance(named: .darkAqua)
-
         // Prevent app from terminating when last window is closed
         NSApp.setActivationPolicy(.regular)
     }

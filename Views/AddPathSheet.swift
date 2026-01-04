@@ -109,9 +109,11 @@ struct AddPathSheet: View {
                     Spacer()
 
                     Button("Scan Now") {
+                        // Dismiss FIRST, then trigger scan
+                        // This prevents blocking the UI inside the sheet
+                        dismiss()
                         Task {
                             await viewModel.scanAllProjects()
-                            dismiss()
                         }
                     }
                     .disabled(viewModel.getMonitoredPaths().isEmpty)

@@ -53,6 +53,7 @@ struct GitStatus: Codable, Hashable {
     var pendingPullRequests: Int
     var lastCommitHash: String?
     var lastCommitMessage: String?
+    var hasGitHubRemote: Bool
 
     init(
         currentBranch: String = "main",
@@ -62,7 +63,8 @@ struct GitStatus: Codable, Hashable {
         stagedFiles: [String] = [],
         pendingPullRequests: Int = 0,
         lastCommitHash: String? = nil,
-        lastCommitMessage: String? = nil
+        lastCommitMessage: String? = nil,
+        hasGitHubRemote: Bool = false
     ) {
         self.currentBranch = currentBranch
         self.hasUncommittedChanges = hasUncommittedChanges
@@ -72,6 +74,7 @@ struct GitStatus: Codable, Hashable {
         self.pendingPullRequests = pendingPullRequests
         self.lastCommitHash = lastCommitHash
         self.lastCommitMessage = lastCommitMessage
+        self.hasGitHubRemote = hasGitHubRemote
     }
 
     /// Overall health status
