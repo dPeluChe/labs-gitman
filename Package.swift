@@ -30,6 +30,10 @@ let package = Package(
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"])
             ]
+        ),
+        .testTarget(
+            name: "GitMonitorTests",
+            dependencies: ["GitMonitor"]
         )
     ]
 )

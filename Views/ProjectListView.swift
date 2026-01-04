@@ -7,19 +7,46 @@ struct ProjectListView: View {
 
     var body: some View {
         NavigationSplitView {
-            // Sidebar with project categories
-            List(selection: $selectedProject) {
-                Section("Git Repositories") {
-                    ForEach(viewModel.gitRepositories) { project in
-                        ProjectRowView(project: project)
-                            .tag(project)
+            VStack {
+                // Dependency Warning
+                if !viewModel.missingDependencies.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text("Missing Dependencies")
+                            .font(.headline)
+                            .foregroundColor(.red)
+                        
+                        ForEach(viewModel.missingDependencies, id: \.self) { dep in
+                            VStack(alignment: .leading) {
+                                Text(dep.message)
+                                    .font(.caption)
+                                Text(dep.installInstruction)
+                                    .font(.caption2)
+                                    .fontWeight(.bold)
+                            }
+                            .padding(.vertical, 2)
+                        }
                     }
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Color.red.opacity(0.1))
+                    .cornerRadius(8)
+                    .padding(.horizontal)
                 }
 
-                Section("Non-Git Projects") {
-                    ForEach(viewModel.nonGitProjects) { project in
-                        ProjectRowView(project: project)
-                            .tag(project)
+                // Sidebar with project categories
+                List(selection: $selectedProject) {
+                    Section("Git Repositories") {
+                        ForEach(viewModel.gitRepositories) { project in
+                            ProjectRowView(project: project)
+                                .tag(project)
+                        }
+                    }
+
+                    Section("Non-Git Projects") {
+                        ForEach(viewModel.nonGitProjects) { project in
+                            ProjectRowView(project: project)
+                                .tag(project)
+                        }
                     }
                 }
             }
@@ -63,7 +90,7 @@ struct ProjectListView: View {
                 }) {
                     if viewModel.isScanning {
                         ProgressView()
-                            .controlSize(.small)
+                        .controlSize(.small)
                     } else {
                         Label("Scan", systemImage: "arrow.clockwise")
                     }
@@ -89,6 +116,11 @@ struct ProjectListView: View {
         } message: {
             if let errorMessage = viewModel.errorMessage {
                 Text(errorMessage)
+            }
+        }
+        .onAppear {
+            Task {
+                await viewModel.checkDependencies()
             }
         }
     }

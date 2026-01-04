@@ -6,6 +6,7 @@ class ProjectScannerViewModel: ObservableObject {
     @Published var projects: [Project] = []
     @Published var isScanning = false
     @Published var errorMessage: String?
+    @Published var missingDependencies: [GitService.DependencyStatus] = []
 
     private let configStore = ConfigStore()
     private let gitService = GitService()
@@ -14,6 +15,17 @@ class ProjectScannerViewModel: ObservableObject {
     init() {
         // Load existing projects
         loadProjects()
+    }
+    
+    // MARK: - Dependencies
+    
+    func checkDependencies() async {
+        let missing = await gitService.checkDependencies()
+        missingDependencies = missing
+        
+        if !missing.isEmpty {
+             logger.warning("Missing dependencies: \(missing)")
+        }
     }
 
     // MARK: - Scanning
