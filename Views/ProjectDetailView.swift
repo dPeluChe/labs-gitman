@@ -6,13 +6,19 @@ struct ProjectDetailView: View {
 
     @State private var showingLLMAnalysis = false
     @State private var showingSheet = false
-    @State private var selectedTab: DetailTab = .overview
+    @State private var selectedTab: DetailTab
 
     enum DetailTab: String, CaseIterable, Identifiable {
         case overview = "Overview"
         case files = "Files"
         case terminal = "Terminal"
         var id: String { rawValue }
+    }
+    
+    init(project: Project, initialTab: DetailTab? = nil, onRefresh: @escaping () -> Void) {
+        self.project = project
+        self.onRefresh = onRefresh
+        _selectedTab = State(initialValue: initialTab ?? .overview)
     }
 
     var body: some View {
@@ -72,7 +78,7 @@ struct ProjectDetailView: View {
                     }
                     
                     if let hash = status.lastCommitHash {
-                        commitSection(hash: hash, message: status.lastCommitMessage)
+                        commitSection(hash: hash, message: status.lastCommitMessage, date: status.lastCommitDate)
                     }
                     
                     if status.hasGitHubRemote {
@@ -193,20 +199,31 @@ struct ProjectDetailView: View {
         .cornerRadius(12)
     }
     
-    private func commitSection(hash: String, message: String?) -> some View {
+    private func commitSection(hash: String, message: String?, date: Date?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Latest Commit").font(.headline)
             HStack(alignment: .top) {
                 Image(systemName: "signpost.right.and.left").foregroundColor(.secondary)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(message ?? "No message").font(.subheadline).fixedSize(horizontal: false, vertical: true)
-                    Text(hash.prefix(8)).font(.system(.caption, design: .monospaced)).padding(.horizontal, 6).padding(.vertical, 2).background(Color.secondary.opacity(0.1)).cornerRadius(4)
+                    HStack {
+                        Text(hash.prefix(8)).font(.system(.caption, design: .monospaced)).padding(.horizontal, 6).padding(.vertical, 2).background(Color.secondary.opacity(0.1)).cornerRadius(4)
+                        if let date = date {
+                            Text(relativeTime(date)).font(.caption2).foregroundColor(.secondary)
+                        }
+                    }
                 }
             }
         }
         .padding()
         .background(Color(.controlBackgroundColor))
         .cornerRadius(12)
+    }
+    
+    private func relativeTime(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     private var nonGitView: some View {
@@ -248,7 +265,8 @@ struct ProjectDetailView: View {
     }
 
     private func openInTerminal() {
-        let script = "tell application \"Terminal\" to do script \"cd '\(project.path)'\""
-        NSAppleScript(source: script)?.executeAndReturnError(nil)
+        // This opens the INTERNAL terminal since we are in the detail view
+        // Switching tab to terminal
+        selectedTab = .terminal
     }
 }

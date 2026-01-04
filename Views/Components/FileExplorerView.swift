@@ -52,13 +52,7 @@ struct FileExplorerView: View {
                         ProgressView()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
-                        ScrollView {
-                            Text(fileContent)
-                                .font(.monospaced(.body)())
-                                .padding()
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .textSelection(.enabled)
-                        }
+                        CodeViewer(content: fileContent, fileExtension: (selected.name as NSString).pathExtension)
                     }
                 }
                 .background(Color(.textBackgroundColor))
@@ -80,7 +74,6 @@ struct FileExplorerView: View {
     }
 
     private func loadFileSystem() {
-        let fileManager = FileManager.default
         // Basic recursive loader - for very large projects this might need optimization
         // For now, let's just load the top level or pseudo-lazy load if possible.
         // Since List supports children, let's try a simple recursive struct.

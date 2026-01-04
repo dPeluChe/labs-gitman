@@ -3,6 +3,7 @@ import AppKit
 
 struct ProjectListView: View {
     @StateObject private var viewModel = ProjectScannerViewModel()
+    @StateObject private var settings = SettingsStore()
     @State private var showingAddPathSheet = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var searchText = ""
@@ -16,7 +17,7 @@ struct ProjectListView: View {
 
     enum SidebarSelection: Hashable {
         case dashboard
-        case project(Project)
+        case project(Project, tab: String?)
     }
     
     enum FilterOption {
@@ -45,30 +46,14 @@ struct ProjectListView: View {
                     if !filteredGitRepos.isEmpty {
                         Section(header: sectionHeader("Git Repositories", icon: "arrow.triangle.branch", count: filteredGitRepos.count)) {
                             ForEach(filteredGitRepos) { project in
-                                NavigationLink(value: SidebarSelection.project(project)) {
+                                NavigationLink(value: SidebarSelection.project(project, tab: nil)) {
                                     ProjectRowView(project: project)
                                         .contextMenu {
-                                            Button {
-                                                NSWorkspace.shared.open(URL(fileURLWithPath: project.path))
-                                            } label: {
-                                                Label("Open in Finder", systemImage: "folder")
-                                            }
-                                            
-                                            Button {
-                                                let script = "tell application \"Terminal\" to do script \"cd '\(project.path)'\""
-                                                NSAppleScript(source: script)?.executeAndReturnError(nil)
-                                            } label: {
-                                                Label("Open in Terminal", systemImage: "terminal")
-                                            }
-                                            
+                                            openInInternalTerminalButton(project)
+                                            openInExternalTerminalButton(project)
+                                            openInFinderButton(project)
                                             Divider()
-                                            
-                                            Button {
-                                                NSPasteboard.general.clearContents()
-                                                NSPasteboard.general.setString(project.path, forType: .string)
-                                            } label: {
-                                                Label("Copy Path", systemImage: "doc.on.doc")
-                                            }
+                                            copyPathButton(project)
                                         }
                                 }
                             }
@@ -78,30 +63,13 @@ struct ProjectListView: View {
                     if !filteredNonGit.isEmpty {
                         Section(header: sectionHeader("Other Projects", icon: "folder", count: filteredNonGit.count)) {
                             ForEach(filteredNonGit) { project in
-                                NavigationLink(value: SidebarSelection.project(project)) {
+                                NavigationLink(value: SidebarSelection.project(project, tab: nil)) {
                                     ProjectRowView(project: project)
                                         .contextMenu {
-                                            Button {
-                                                NSWorkspace.shared.open(URL(fileURLWithPath: project.path))
-                                            } label: {
-                                                Label("Open in Finder", systemImage: "folder")
-                                            }
-                                            
-                                            Button {
-                                                let script = "tell application \"Terminal\" to do script \"cd '\(project.path)'\""
-                                                NSAppleScript(source: script)?.executeAndReturnError(nil)
-                                            } label: {
-                                                Label("Open in Terminal", systemImage: "terminal")
-                                            }
-                                            
+                                            openInExternalTerminalButton(project)
+                                            openInFinderButton(project)
                                             Divider()
-                                            
-                                            Button {
-                                                NSPasteboard.general.clearContents()
-                                                NSPasteboard.general.setString(project.path, forType: .string)
-                                            } label: {
-                                                Label("Copy Path", systemImage: "doc.on.doc")
-                                            }
+                                            copyPathButton(project)
                                         }
                                 }
                             }
@@ -132,7 +100,7 @@ struct ProjectListView: View {
                         
                         Picker("Sort", selection: $sortOption) {
                             Text("Name").tag(SortOption.name)
-                            Text("Recent Activity").tag(SortOption.recent)
+                            Text("Most Recent Activity").tag(SortOption.recent)
                         }
                     } label: {
                         Label("Filter & Sort", systemImage: "line.3.horizontal.decrease.circle")
@@ -168,14 +136,61 @@ struct ProjectListView: View {
             switch selection {
             case .dashboard:
                 DashboardView(projects: viewModel.projects)
-            case .project(let project):
-                ProjectDetailView(project: project, onRefresh: {
+            case .project(let project, let tab):
+                // Map string back to concrete tab enum if present
+                let initialTab = tab.flatMap { ProjectDetailView.DetailTab(rawValue: $0) }
+                ProjectDetailView(project: project, initialTab: initialTab, onRefresh: {
                     Task { await viewModel.refreshProjectStatus(project) }
                 })
             case nil:
                 emptyStateView
             }
         }
+    }
+    
+    // MARK: - Context Menu Buttons
+    
+    private func openInInternalTerminalButton(_ project: Project) -> some View {
+        Button {
+             selection = .project(project, tab: ProjectDetailView.DetailTab.terminal.rawValue)
+        } label: {
+             Label("Open in Internal Terminal", systemImage: "desktopcomputer")
+        }
+    }
+    
+    private func openInExternalTerminalButton(_ project: Project) -> some View {
+        Button {
+            openExternalTerminal(path: project.path)
+        } label: {
+            Label("Open in \(settings.preferredTerminal.rawValue)", systemImage: "terminal")
+        }
+    }
+    
+    private func openInFinderButton(_ project: Project) -> some View {
+        Button {
+            NSWorkspace.shared.open(URL(fileURLWithPath: project.path))
+        } label: {
+            Label("Open in Finder", systemImage: "folder")
+        }
+    }
+    
+    private func copyPathButton(_ project: Project) -> some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(project.path, forType: .string)
+        } label: {
+            Label("Copy Path", systemImage: "doc.on.doc")
+        }
+    }
+    
+    private func openExternalTerminal(path: String) {
+        let app = settings.preferredTerminal
+        let script = "open -a \"\(app.bundleIdentifier)\" \"\(path)\""
+        
+        let task = Process()
+        task.launchPath = "/bin/zsh"
+        task.arguments = ["-c", script]
+        task.launch()
     }
     
     private var filteredGitRepos: [Project] {
@@ -194,13 +209,12 @@ struct ProjectListView: View {
             result = result.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
         }
         
-        // 2. Filter (Only applicable if we have status, but we apply generically)
+        // 2. Filter
         switch filterOption {
         case .all:
             break
         case .clean:
             result = result.filter { 
-                // Keep if it has no status (loading) or if it has status and is clean
                 guard let status = $0.gitStatus else { return true }
                 return !status.hasUncommittedChanges 
             }
@@ -216,8 +230,11 @@ struct ProjectListView: View {
         case .name:
             result.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         case .recent:
-            // If scanning never happened, treat as distant past
-            result.sort { $0.lastScanned > $1.lastScanned }
+            result.sort {
+                let date1 = $0.gitStatus?.lastCommitDate ?? $0.lastScanned
+                let date2 = $1.gitStatus?.lastCommitDate ?? $1.lastScanned
+                return date1 > date2
+            }
         }
         
         return result
@@ -315,7 +332,7 @@ struct ProjectRowView: View {
                     Spacer()
                     // Relative Timestamp
                     if project.isGitRepository {
-                        Text(relativeTime(project.lastScanned))
+                        Text(relativeTime(project.gitStatus?.lastCommitDate ?? project.lastScanned))
                             .font(.caption2)
                             .foregroundColor(.secondary.opacity(0.7))
                     }

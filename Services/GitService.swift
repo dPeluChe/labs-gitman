@@ -15,10 +15,7 @@ actor GitService {
     // MARK: - GitHub Detection
 
     func isGitHubRepository(at path: String) async -> Bool {
-        // First check if it's a git repo
         guard isGitRepository(at: path) else { return false }
-
-        // Resolve git path
         let gitCheck = await isCommandAvailable("git")
         guard gitCheck.isAvailable, let gitPath = gitCheck.path else { return false }
 
@@ -36,7 +33,6 @@ actor GitService {
 
     // MARK: - Dependency Checking
 
-    /// Checks if required tools are installed and accessible
     func checkDependencies() async -> [DependencyStatus] {
         async let gitCheck = isCommandAvailable("git")
         async let ghCheck = isCommandAvailable("gh")
@@ -81,7 +77,6 @@ actor GitService {
     }
 
     private func isCommandAvailable(_ command: String) async -> CommandCheck {
-        // Common paths to search, including Apple Silicon Homebrew
         let searchPaths = [
             "/usr/bin",
             "/usr/local/bin",
@@ -89,7 +84,6 @@ actor GitService {
             "/bin"
         ]
         
-        // 1. Try to find precise path first
         for path in searchPaths {
             let fullPath = (path as NSString).appendingPathComponent(command)
             if fileManager.fileExists(atPath: fullPath) && fileManager.isExecutableFile(atPath: fullPath) {
@@ -97,7 +91,6 @@ actor GitService {
             }
         }
         
-        // 2. Fallback to 'which' command
         do {
             let path = try await processExecutor.execute(
                 command: "/usr/bin/which",
@@ -113,7 +106,7 @@ actor GitService {
     
     private func resolveCommandPath(_ command: String) async -> String {
         let result = await isCommandAvailable(command)
-        return result.path ?? command // Return command name itself as fallback to let system attempt resolution
+        return result.path ?? command
     }
 
     // MARK: - Git Status
@@ -156,6 +149,7 @@ actor GitService {
             pendingPullRequests: prCount,
             lastCommitHash: commit.hash,
             lastCommitMessage: commit.message,
+            lastCommitDate: commit.date,
             hasGitHubRemote: isGitHub
         )
     }
@@ -194,10 +188,7 @@ actor GitService {
                 directory: path
             )
 
-            return output
-                .split(separator: "\n")
-                .map { String($0) }
-                .filter { !$0.isEmpty }
+            return output.split(separator: "\n").map { String($0) }.filter { !$0.isEmpty }
         } catch {
             return []
         }
@@ -211,10 +202,7 @@ actor GitService {
                 directory: path
             )
 
-            return output
-                .split(separator: "\n")
-                .map { String($0) }
-                .filter { !$0.isEmpty }
+            return output.split(separator: "\n").map { String($0) }.filter { !$0.isEmpty }
         } catch {
             return []
         }
@@ -228,16 +216,13 @@ actor GitService {
                 directory: path
             )
 
-            return output
-                .split(separator: "\n")
-                .map { String($0) }
-                .filter { !$0.isEmpty }
+            return output.split(separator: "\n").map { String($0) }.filter { !$0.isEmpty }
         } catch {
             return []
         }
     }
 
-    private func getLastCommit(path: String, gitPath: String) async throws -> (hash: String, message: String) {
+    private func getLastCommit(path: String, gitPath: String) async throws -> (hash: String, message: String, date: Date?) {
         do {
             let hash = try await processExecutor.execute(
                 command: gitPath,
@@ -245,25 +230,34 @@ actor GitService {
                 directory: path
             )
 
-            let message = try await processExecutor.execute(
+            let logOutput = try await processExecutor.execute(
                 command: gitPath,
-                arguments: ["log", "-1", "--pretty=%s"],
+                arguments: ["log", "-1", "--pretty=%s|%cd", "--date=iso-strict"],
                 directory: path
             )
+            
+            let trimmedLog = logOutput.trimmingCharacters(in: .whitespacesAndNewlines)
+            let parts = trimmedLog.components(separatedBy: "|")
+            
+            let message = parts.first ?? ""
+            let dateString = parts.count > 1 ? parts[1] : ""
+            
+            let formatter = ISO8601DateFormatter()
+            let date = formatter.date(from: dateString)
 
             return (
                 hash.trimmingCharacters(in: .whitespacesAndNewlines),
-                message.trimmingCharacters(in: .whitespacesAndNewlines)
+                message,
+                date
             )
         } catch {
-            return (hash: "", message: "")
+            return (hash: "", message: "", date: nil)
         }
     }
 
     // MARK: - GitHub CLI Integration
 
     private func getPendingPullRequestCount(path: String) async -> Int {
-        // Resolve gh path
         let check = await isCommandAvailable("gh")
         guard check.isAvailable, let ghPath = check.path else {
             return 0
@@ -277,10 +271,7 @@ actor GitService {
             )
 
             // Count open PRs
-            let openPRs = output
-                .split(separator: "\n")
-                .filter { $0.contains("OPEN") }
-
+            let openPRs = output.split(separator: "\n").filter { $0.contains("OPEN") }
             return openPRs.count
         } catch {
             return 0
@@ -302,9 +293,7 @@ actor ProcessExecutor {
         process.executableURL = URL(fileURLWithPath: command)
         process.arguments = arguments
         
-        // Add environment to ensure PATH is respected if needed
         var env = ProcessInfo.processInfo.environment
-        // Append common paths to PATH if missing
         let pathVar = env["PATH"] ?? ""
         let extraPaths = ":/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin"
         if !pathVar.contains("/opt/homebrew/bin") {

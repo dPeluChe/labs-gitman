@@ -1,5 +1,6 @@
 import SwiftUI
 import Combine
+import Foundation
 
 struct TerminalView: View {
     let projectPath: String
@@ -117,14 +118,11 @@ class TerminalViewModel: ObservableObject {
         isRunning = true
         appendLog("> \(command)", isError: false)
         
-        // Basic command Runner via Process
-        // Note: Interactive commands (like `top` or `vi`) won't work well here.
-        // This is for fire-and-forget or batch commands.
-        
         let task = Process()
         task.currentDirectoryPath = workingDirectory
         task.launchPath = "/bin/zsh"
-        task.arguments = ["-c", command]
+        // Use login shell to ensure PATH users env is loaded
+        task.arguments = ["-l", "-c", command]
         
         let pipe = Pipe()
         let errorPipe = Pipe()
@@ -141,7 +139,6 @@ class TerminalViewModel: ObservableObject {
             let errorOutput = String(data: errData, encoding: .utf8) ?? ""
             
             if !output.isEmpty {
-                // Split lines to look nice
                 for line in output.split(separator: "\n", omittingEmptySubsequences: false) {
                     appendLog(String(line), isError: false)
                 }

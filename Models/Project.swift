@@ -53,6 +53,7 @@ struct GitStatus: Codable, Hashable {
     var pendingPullRequests: Int
     var lastCommitHash: String?
     var lastCommitMessage: String?
+    var lastCommitDate: Date? // Used for sorting
     var hasGitHubRemote: Bool
 
     init(
@@ -64,6 +65,7 @@ struct GitStatus: Codable, Hashable {
         pendingPullRequests: Int = 0,
         lastCommitHash: String? = nil,
         lastCommitMessage: String? = nil,
+        lastCommitDate: Date? = nil,
         hasGitHubRemote: Bool = false
     ) {
         self.currentBranch = currentBranch
@@ -74,6 +76,7 @@ struct GitStatus: Codable, Hashable {
         self.pendingPullRequests = pendingPullRequests
         self.lastCommitHash = lastCommitHash
         self.lastCommitMessage = lastCommitMessage
+        self.lastCommitDate = lastCommitDate
         self.hasGitHubRemote = hasGitHubRemote
     }
 
