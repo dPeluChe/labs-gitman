@@ -2,11 +2,16 @@
 
 ## 🎯 What is GitMonitor?
 
-**GitMonitor** is a native macOS application built with Swift and SwiftUI that helps developers monitor multiple Git projects simultaneously. It provides real-time status information and AI-powered analysis for codebases.
+**GitMonitor** is a native macOS application built with Swift and SwiftUI that helps developers monitor multiple Git projects simultaneously. It provides real-time status information, AI-powered analysis, integrated terminal, and comprehensive branch management - all in one beautiful native interface.
 
 ### Key Concept
 
-Instead of manually checking each project's Git status, opening terminals, and running commands, GitMonitor centralizes everything in one beautiful native interface with intelligent AI analysis capabilities.
+Instead of manually checking each project's Git status, opening terminals, and running commands, GitMonitor centralizes everything in one interface with:
+- Menu bar integration for quick access
+- Built-in terminal with command execution
+- Visual commit timeline and branch management
+- AI-powered code analysis
+- Complete keyboard shortcuts for power users
 
 ---
 
@@ -171,6 +176,16 @@ Displays formatted result
 - Branch, commits, PRs, file changes
 - Health status calculation
 
+**GitCommit.swift** ⭐ NEW
+- Individual commit information
+- Author, email, message, date
+- Used for commit timeline visualization
+
+**GitBranch.swift**
+- Branch metadata
+- Current branch indicator
+- Last commit info per branch
+
 **ConfigStore.swift**
 - @MainActor class for UI thread safety
 - UserDefaults persistence
@@ -190,10 +205,13 @@ Displays formatted result
 
 ### Services
 
-**GitService.swift**
+**GitService.swift** ⭐ ENHANCED
 - `actor` for thread-safe Git operations
 - Process execution for git/gh CLI
 - Error handling and result parsing
+- **NEW**: `switchBranch()` - Change branches with validation
+- **NEW**: `getCommitHistory()` - Fetch commit timeline
+- **NEW**: `GitError` enum for proper error handling
 
 **LLMService.swift**
 - Singleton pattern (BYOK)
@@ -203,20 +221,42 @@ Displays formatted result
 
 ### Views
 
-**ProjectListView.swift**
+**ProjectListView.swift** ⭐ ENHANCED
 - Main list with sidebar/detail
 - Real-time status indicators
 - Add/Scan toolbar
+- **NEW**: Keyboard shortcuts (⌘K, ⌘R, ⌘N, ESC)
+- **NEW**: Tooltips on buttons
+- **NEW**: Project navigation with ↑↓
 
-**ProjectDetailView.swift**
+**ProjectDetailView.swift** ⭐ ENHANCED
 - Detailed project information
 - Git status visualization
 - Action buttons
+- **NEW**: Unified "Branches & History" tab
+- **NEW**: Branch switching via context menu
+- **NEW**: Visual commit timeline
 
-**SettingsView.swift**
+**TerminalView.swift** ⭐ ENHANCED
+- Built-in terminal with command execution
+- **NEW**: Auto-focused input field
+- **NEW**: Quick actions toolbar
+- **NEW**: Open in external terminal button
+- **NEW**: Uses configured terminal app
+
+**SettingsView.swift** ⭐ ENHANCED
 - AI model configuration
 - API key management
 - Ollama setup
+- **NEW**: Terminal app selection (Ghostty, iTerm2, etc.)
+- **NEW**: Visual save feedback
+- **NEW**: ESC to close
+
+**MenuBarContentView.swift** ⭐ NEW
+- Menu bar dropdown interface
+- Project statistics summary
+- Quick actions for all projects
+- Refresh and navigation
 
 ---
 
