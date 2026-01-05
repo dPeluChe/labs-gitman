@@ -30,7 +30,7 @@ struct ProjectDetailView: View {
                 .background(Color(.windowBackgroundColor))
 
             // Tab Picker
-            Picker("View", selection: $selectedTab) {
+            Picker("", selection: $selectedTab) {
                 ForEach(DetailTab.allCases) { tab in
                     Text(tab.rawValue).tag(tab)
                 }
@@ -126,16 +126,27 @@ struct ProjectDetailView: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(project.name)
                     .font(.system(size: 28, weight: .bold))
-                
-                Text(project.path)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+
+                Button(action: {
+                    NSWorkspace.shared.open(URL(fileURLWithPath: project.path))
+                }) {
+                    HStack(spacing: 4) {
+                        Image(systemName: "folder")
+                            .font(.caption2)
+                        Text(project.path)
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Click to open in Finder")
             }
-            
+
             Spacer()
-            
+
             Button(action: onRefresh) {
                 Image(systemName: "arrow.clockwise")
                     .font(.system(size: 16, weight: .semibold))
