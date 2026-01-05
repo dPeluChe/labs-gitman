@@ -12,6 +12,7 @@ struct ProjectDetailView: View {
         case overview = "Overview"
         case files = "Files"
         case terminal = "Terminal"
+        case branches = "Branches"
         var id: String { rawValue }
     }
     
@@ -47,6 +48,8 @@ struct ProjectDetailView: View {
                 FileExplorerView(projectPath: project.path)
             case .terminal:
                 TerminalView(projectPath: project.path)
+            case .branches:
+                BranchesView(project: project)
             }
         }
         .background(Color(.windowBackgroundColor))
@@ -61,28 +64,37 @@ struct ProjectDetailView: View {
     private func OverviewContent() -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                if project.isGitRepository, let status = project.gitStatus {
-                    // Git Statistics Grid
-                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
-                        statCard(title: "Branch", value: status.currentBranch, icon: "arrow.triangle.branch", color: .blue)
-                        statCard(title: "Status", value: status.healthStatus == .clean ? "Clean" : "Changes", icon: status.healthStatus == .clean ? "checkmark.circle.fill" : "exclamationmark.triangle.fill", color: status.healthStatus == .clean ? .green : .orange)
-                    }
+                if project.isGitRepository {
+                    if let status = project.gitStatus {
+                        // Git Statistics Grid
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
+                            statCard(title: "Active Branch", value: status.currentBranch, icon: "arrow.triangle.branch", color: .blue)
+                            statCard(title: "Status", value: status.healthStatus == .clean ? "Clean" : "Changes", icon: status.healthStatus == .clean ? "checkmark.circle.fill" : "exclamationmark.triangle.fill", color: status.healthStatus == .clean ? .green : .orange)
+                        }
 
-                    // Detailed Status Sections
-                    if status.hasUncommittedChanges {
-                        changesSection(status: status)
-                    }
+                        // Detailed Status Sections
+                        if status.hasUncommittedChanges {
+                            changesSection(status: status)
+                        }
 
-                    if status.pendingPullRequests > 0 {
-                        prSection(count: status.pendingPullRequests)
-                    }
-                    
-                    if let hash = status.lastCommitHash {
-                        commitSection(hash: hash, message: status.lastCommitMessage, date: status.lastCommitDate)
-                    }
-                    
-                    if status.hasGitHubRemote {
-                        githubSection
+                        if status.pendingPullRequests > 0 {
+                            prSection(count: status.pendingPullRequests)
+                        }
+                        
+                        if let hash = status.lastCommitHash {
+                            commitSection(hash: hash, message: status.lastCommitMessage, date: status.lastCommitDate)
+                        }
+                        
+                        if !status.branches.isEmpty {
+                            branchesPreviewSection(status.branches)
+                        }
+                        
+                        if status.hasGitHubRemote {
+                            githubSection
+                        }
+
+                    } else {
+                        loadingView
                     }
 
                 } else {
@@ -94,6 +106,19 @@ struct ProjectDetailView: View {
             }
             .padding(20)
         }
+    }
+    
+    private var loadingView: some View {
+        VStack(spacing: 16) {
+            ProgressView()
+                .scaleEffect(1.5)
+            Text("Analyzing Repository...")
+                .font(.headline)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 200)
+        .background(Color(.controlBackgroundColor))
+        .cornerRadius(12)
     }
 
     private var headerView: some View {
@@ -199,6 +224,46 @@ struct ProjectDetailView: View {
         .cornerRadius(12)
     }
     
+    private func branchesPreviewSection(_ branches: [GitBranch]) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Recent Branches")
+                    .font(.headline)
+                Spacer()
+                Button { selectedTab = .branches } label: {
+                    Text("See All (\(branches.count))")
+                        .font(.caption)
+                }
+            }
+            
+            ForEach(branches.prefix(3), id: \.name) { branch in
+                HStack {
+                    Image(systemName: branch.isCurrent ? "record.circle.fill" : "circle")
+                        .foregroundColor(branch.isCurrent ? .green : .secondary)
+                        .font(.caption2)
+                    
+                    Text(branch.name)
+                        .font(.subheadline)
+                        .fontWeight(branch.isCurrent ? .semibold : .regular)
+                    
+                    Spacer()
+                    
+                    if let date = branch.lastCommitDate {
+                        Text(relativeTime(date))
+                            .font(.caption2)
+                            .foregroundColor(.secondary)
+                    }
+                }
+                .padding(8)
+                .background(Color(.controlBackgroundColor))
+                .cornerRadius(8)
+            }
+        }
+        .padding()
+        .background(Color(.controlBackgroundColor).opacity(0.5))
+        .cornerRadius(12)
+    }
+    
     private func commitSection(hash: String, message: String?, date: Date?) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("Latest Commit").font(.headline)
@@ -268,5 +333,67 @@ struct ProjectDetailView: View {
         // This opens the INTERNAL terminal since we are in the detail view
         // Switching tab to terminal
         selectedTab = .terminal
+    }
+}
+
+// Separate Branch View Component
+struct BranchesView: View {
+    let project: Project
+    @State private var searchText = ""
+    
+    var body: some View {
+        VStack {
+            if let branches = project.gitStatus?.branches {
+                List {
+                    ForEach(filterBranches(branches), id: \.name) { branch in
+                        HStack {
+                            VStack(alignment: .leading) {
+                                HStack {
+                                    if branch.isCurrent {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundColor(.green)
+                                            .font(.caption)
+                                    }
+                                    Text(branch.name)
+                                        .font(.headline)
+                                        .fontWeight(branch.isCurrent ? .bold : .medium)
+                                }
+                                
+                                if let hash = branch.lastCommitHash {
+                                    Text(hash.prefix(7))
+                                        .font(.caption)
+                                        .monospaced()
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                            
+                            Spacer()
+                            
+                            if let date = branch.lastCommitDate {
+                                Text(relativeTime(date))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+                .searchable(text: $searchText, prompt: "Search branches...")
+            } else {
+                Text("No branch info available")
+                    .foregroundColor(.secondary)
+            }
+        }
+    }
+    
+    private func filterBranches(_ branches: [GitBranch]) -> [GitBranch] {
+        if searchText.isEmpty { return branches }
+        return branches.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
+    }
+    
+    private func relativeTime(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 }

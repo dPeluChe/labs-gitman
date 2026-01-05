@@ -72,11 +72,31 @@ struct TerminalView: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 4) {
-                        ForEach(vm.outputLines) { line in
-                            Text(line.text)
-                                .font(.monospaced(.body)())
-                                .foregroundColor(line.isError ? .red : .primary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
+                        if vm.outputLines.isEmpty {
+                            // Empty state placeholder
+                            VStack(spacing: 12) {
+                                Spacer()
+                                Image(systemName: "chevron.left.forwardslash.chevron.right.forwardslash")
+                                    .font(.system(size: 40))
+                                    .foregroundColor(.gray)
+                                Text("Terminal Ready")
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                                Text("Type a command below or use quick actions")
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            VStack(alignment: .leading, spacing: 4) {
+                                ForEach(vm.outputLines) { line in
+                                    Text(line.text)
+                                        .font(.monospaced(.body)())
+                                        .foregroundColor(line.isError ? .red : .primary)
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                }
+                            }
                         }
                     }
                     .padding()

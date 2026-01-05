@@ -139,7 +139,7 @@ struct ProjectListView: View {
         } detail: {
             switch selection {
             case .dashboard:
-                DashboardView(projects: viewModel.projects)
+                DashboardView(projects: viewModel.projects, isLoading: viewModel.isScanning)
             case .project(let project, let tab):
                 // Map string back to concrete tab enum if present
                 let initialTab = tab.flatMap { ProjectDetailView.DetailTab(rawValue: $0) }
