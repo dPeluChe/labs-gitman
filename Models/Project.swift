@@ -43,6 +43,14 @@ struct Project: Identifiable, Codable, Hashable {
     }
 }
 
+/// Git branch information
+struct GitBranch: Codable, Hashable {
+    let name: String
+    let isCurrent: Bool
+    let lastCommitDate: Date?
+    let lastCommitHash: String?
+}
+
 /// Git repository status information
 struct GitStatus: Codable, Hashable {
     var currentBranch: String
@@ -55,6 +63,7 @@ struct GitStatus: Codable, Hashable {
     var lastCommitMessage: String?
     var lastCommitDate: Date? // Used for sorting
     var hasGitHubRemote: Bool
+    var branches: [GitBranch] // List of branches
 
     init(
         currentBranch: String = "main",
@@ -66,7 +75,8 @@ struct GitStatus: Codable, Hashable {
         lastCommitHash: String? = nil,
         lastCommitMessage: String? = nil,
         lastCommitDate: Date? = nil,
-        hasGitHubRemote: Bool = false
+        hasGitHubRemote: Bool = false,
+        branches: [GitBranch] = []
     ) {
         self.currentBranch = currentBranch
         self.hasUncommittedChanges = hasUncommittedChanges
@@ -78,6 +88,7 @@ struct GitStatus: Codable, Hashable {
         self.lastCommitMessage = lastCommitMessage
         self.lastCommitDate = lastCommitDate
         self.hasGitHubRemote = hasGitHubRemote
+        self.branches = branches
     }
 
     /// Overall health status

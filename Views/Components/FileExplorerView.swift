@@ -31,6 +31,28 @@ struct FileExplorerView: View {
                             Task { await loadFileContent(node.path) }
                         }
                     }
+                    .contextMenu {
+                        Button {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: node.path))
+                        } label: {
+                            Label("Open External", systemImage: "arrow.up.right.square")
+                        }
+                        
+                        Button {
+                            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: node.path)])
+                        } label: {
+                            Label("Show in Finder", systemImage: "folder")
+                        }
+                        
+                        Divider()
+                        
+                        Button {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(node.path, forType: .string)
+                        } label: {
+                            Label("Copy Path", systemImage: "doc.on.doc")
+                        }
+                    }
                 }
                 .listStyle(.sidebar)
             }
@@ -74,10 +96,6 @@ struct FileExplorerView: View {
     }
 
     private func loadFileSystem() {
-        // Basic recursive loader - for very large projects this might need optimization
-        // For now, let's just load the top level or pseudo-lazy load if possible.
-        // Since List supports children, let's try a simple recursive struct.
-        
         self.fileTree = FileSystemUtils.getContents(of: projectPath)
     }
     
@@ -85,12 +103,9 @@ struct FileExplorerView: View {
         isLoadingContent = true
         defer { isLoadingContent = false }
         
-        // Basic text read
         do {
-            // Check if binary or too large? For now just try read string
             let url = URL(fileURLWithPath: path)
             let content = try String(contentsOf: url, encoding: .utf8)
-            // Truncate if huge?
             fileContent = String(content.prefix(50000)) 
         } catch {
             fileContent = "Error reading file: \(error.localizedDescription)\n(Note: Binary files or non-UTF8 text are not supported yet)"
@@ -129,7 +144,6 @@ struct FileSystemUtils {
             }
         }
         
-        // Sort: Directories first, then files
         return nodes.sorted {
             ($0.isDirectory && !$1.isDirectory) ||
             ($0.isDirectory == $1.isDirectory && $0.name < $1.name)

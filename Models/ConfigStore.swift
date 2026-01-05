@@ -6,8 +6,10 @@ import OSLog
 class ConfigStore: ObservableObject {
     @Published var monitoredPaths: [String] = []
     @Published var projects: [Project] = []
+    @Published var ignoredPaths: [String] = []
 
     private let pathsKey = "monitoredPaths"
+    private let ignoredKey = "ignoredPaths"
     private let fileManager = FileManager.default
     private let logger = Logger(subsystem: "com.gitmonitor", category: "ConfigStore")
 
@@ -16,6 +18,7 @@ class ConfigStore: ObservableObject {
 
     init() {
         loadMonitoredPaths()
+        loadIgnoredPaths()
     }
 
     // MARK: - Path Management
@@ -39,6 +42,26 @@ class ConfigStore: ObservableObject {
 
     private func saveMonitoredPaths() {
         defaults.set(monitoredPaths, forKey: pathsKey)
+    }
+    
+    // MARK: - Ignore List Management
+    
+    func ignorePath(_ path: String) {
+        guard !ignoredPaths.contains(path) else { return }
+        ignoredPaths.append(path)
+        saveIgnoredPaths()
+        // Remove immediately from current projects
+        projects.removeAll { $0.path == path }
+    }
+    
+    private func loadIgnoredPaths() {
+        if let saved = defaults.stringArray(forKey: ignoredKey) {
+            ignoredPaths = saved
+        }
+    }
+    
+    private func saveIgnoredPaths() {
+        defaults.set(ignoredPaths, forKey: ignoredKey)
     }
 
     // MARK: - Project Discovery
@@ -92,6 +115,8 @@ class ConfigStore: ObservableObject {
         // If the path itself is a git repo, return it as a project
         let gitPath = (path as NSString).appendingPathComponent(".git")
         if fileManager.fileExists(atPath: gitPath) {
+            if ignoredPaths.contains(path) { return [] } // Skip ignored
+            
             logger.info("Found git repo at root: \(path)")
             var project = Project(path: path)
             project.isGitRepository = true
@@ -110,6 +135,8 @@ class ConfigStore: ObservableObject {
 
         for item in contents {
             let itemPath = (path as NSString).appendingPathComponent(item)
+            
+            if ignoredPaths.contains(itemPath) { continue } // Skip ignored
 
             var isDir: ObjCBool = false
             guard fileManager.fileExists(atPath: itemPath, isDirectory: &isDir),

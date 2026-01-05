@@ -1,13 +1,71 @@
 import SwiftUI
 import Combine
 import Foundation
+import AppKit
+
+// Custom TextField to handle arrow keys
+struct TerminalTextField: NSViewRepresentable {
+    @Binding var text: String
+    var onCommit: () -> Void
+    var onHistoryUp: () -> Void
+    var onHistoryDown: () -> Void
+
+    func makeNSView(context: Context) -> NSTextField {
+        let textField = NSTextField()
+        textField.delegate = context.coordinator
+        textField.focusRingType = .none
+        textField.isBordered = false
+        textField.drawsBackground = false
+        textField.font = .monospacedSystemFont(ofSize: 13, weight: .regular)
+        return textField
+    }
+
+    func updateNSView(_ nsView: NSTextField, context: Context) {
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(self)
+    }
+
+    class Coordinator: NSObject, NSTextFieldDelegate {
+        var parent: TerminalTextField
+
+        init(_ parent: TerminalTextField) {
+            self.parent = parent
+        }
+
+        func controlTextDidChange(_ obj: Notification) {
+            if let textField = obj.object as? NSTextField {
+                parent.text = textField.stringValue
+            }
+        }
+        
+        func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+            if commandSelector == #selector(NSResponder.insertNewline(_:)) {
+                parent.onCommit()
+                return true
+            } else if commandSelector == #selector(NSResponder.moveUp(_:)) {
+                parent.onHistoryUp()
+                return true
+            } else if commandSelector == #selector(NSResponder.moveDown(_:)) {
+                parent.onHistoryDown()
+                return true
+            }
+            return false
+        }
+    }
+}
 
 struct TerminalView: View {
     let projectPath: String
     @StateObject private var vm = TerminalViewModel()
     @State private var inputCommand: String = ""
-    @FocusState private var isInputFocused: Bool
-
+    @State private var history: [String] = []
+    @State private var historyIndex = -1
+    
     var body: some View {
         VStack(spacing: 0) {
             // Output Area
@@ -37,13 +95,13 @@ struct TerminalView: View {
                 Text(">")
                     .font(.monospaced(.body)())
                 
-                TextField("Enter command...", text: $inputCommand)
-                    .font(.monospaced(.body)())
-                    .textFieldStyle(.plain)
-                    .focused($isInputFocused)
-                    .onSubmit {
-                        executeCommand()
-                    }
+                TerminalTextField(
+                    text: $inputCommand,
+                    onCommit: executeCommand,
+                    onHistoryUp: historyUp,
+                    onHistoryDown: historyDown
+                )
+                .frame(height: 20)
                 
                 if vm.isRunning {
                     ProgressView()
@@ -84,10 +142,43 @@ struct TerminalView: View {
     
     private func executeCommand() {
         guard !inputCommand.isEmpty else { return }
+        
+        // Add to history if unique or last
+        if history.last != inputCommand {
+            history.append(inputCommand)
+        }
+        historyIndex = history.count // Reset index to end
+        
+        let cmd = inputCommand
         Task {
-            await vm.runCommand(inputCommand)
+            // Clear input immediately for feel, but ideally after run? No, clear is standard.
             inputCommand = ""
-            isInputFocused = true
+            await vm.runCommand(cmd)
+        }
+    }
+    
+    // MARK: - History Handling
+    
+    private func historyUp() {
+        guard !history.isEmpty else { return }
+        if historyIndex == -1 { historyIndex = history.count } // Start from end
+        
+        if historyIndex > 0 {
+            historyIndex -= 1
+            inputCommand = history[historyIndex]
+        }
+    }
+    
+    private func historyDown() {
+        guard !history.isEmpty else { return }
+        
+        if historyIndex < history.count - 1 {
+            historyIndex += 1
+            inputCommand = history[historyIndex]
+        } else {
+            // Back to empty if we go past last
+            historyIndex = history.count
+            inputCommand = ""
         }
     }
 }
@@ -104,7 +195,6 @@ class TerminalViewModel: ObservableObject {
     @Published var isRunning = false
     
     private var workingDirectory: String = ""
-    private var process: Process?
     
     func setWorkingDirectory(_ path: String) {
         self.workingDirectory = path
@@ -158,6 +248,7 @@ class TerminalViewModel: ObservableObject {
     }
     
     private func appendLog(_ text: String, isError: Bool) {
+        // Ensure UI updates on main thread
         outputLines.append(ConsoleLine(text: text, isError: isError))
     }
 }

@@ -96,6 +96,12 @@ class ProjectScannerViewModel: ObservableObject {
     func removeMonitoredPath(_ path: String) {
         configStore.removeMonitoredPath(path)
     }
+    
+    func ignoreProject(_ path: String) {
+        configStore.ignorePath(path)
+        // Refresh local list immediately
+        self.projects.removeAll { $0.path == path }
+    }
 
     func getMonitoredPaths() -> [String] {
         configStore.monitoredPaths

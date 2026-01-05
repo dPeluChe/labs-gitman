@@ -7,6 +7,8 @@ struct AddPathSheet: View {
 
     @State private var selectedPath: String = ""
     @State private var isChoosingPath = false
+    @State private var previewCount: Int? = nil
+    @State private var isScanningPreview = false
 
     private let fileManager = FileManager.default
     private let logger = Logger(subsystem: "com.gitmonitor", category: "AddPath")
@@ -14,80 +16,117 @@ struct AddPathSheet: View {
     var body: some View {
         NavigationStack {
             VStack(spacing: 20) {
-                // Path input
+                // Header
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Add Path to Monitor")
                         .font(.headline)
-
                     Text("Select a folder to scan for Git repositories")
                         .font(.caption)
                         .foregroundColor(.secondary)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                // Path display
+                // Current Selection & Preview
                 GroupBox {
-                    VStack(alignment: .leading, spacing: 8) {
+                    VStack(alignment: .leading, spacing: 12) {
                         HStack {
                             Image(systemName: "folder.fill")
                                 .foregroundColor(.accentColor)
-                            Text(selectedPath.isEmpty ? "No path selected" : selectedPath)
-                                .font(.caption)
-                                .lineLimit(2)
+                                .font(.title2)
+                            
+                            VStack(alignment: .leading) {
+                                Text(selectedPath.isEmpty ? "No path selected" : (selectedPath as NSString).lastPathComponent)
+                                    .font(.headline)
+                                if !selectedPath.isEmpty {
+                                    Text(selectedPath)
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                        .lineLimit(1)
+                                        .truncationMode(.middle)
+                                }
+                            }
                             Spacer()
+                            
+                            if !selectedPath.isEmpty {
+                                Button("Clear") { selectedPath = ""; previewCount = nil }
+                                    .font(.caption)
+                            }
                         }
 
                         if !selectedPath.isEmpty {
                             Divider()
-
-                            HStack {
-                                Image(systemName: "info.circle.fill")
-                                    .font(.caption2)
-                                Text("All Git repos in this folder will be monitored")
-                                    .font(.caption2)
-                                    .foregroundColor(.secondary)
+                            
+                            if isScanningPreview {
+                                HStack {
+                                    ProgressView().controlSize(.small)
+                                    Text("Scanning for repositories...")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            } else if let count = previewCount {
+                                HStack {
+                                    Image(systemName: "arrow.triangle.branch")
+                                        .foregroundColor(.purple)
+                                    Text("Found \(count) Git repositories")
+                                        .fontWeight(.medium)
+                                    Spacer()
+                                    if count > 0 {
+                                        Image(systemName: "checkmark.circle.fill")
+                                            .foregroundColor(.green)
+                                    } else {
+                                        Image(systemName: "exclamationmark.triangle.fill")
+                                            .foregroundColor(.orange)
+                                    }
+                                }
+                                .font(.callout)
                             }
                         }
                     }
+                    .padding(4)
                 }
 
-                // Suggested paths
-                VStack(alignment: .leading, spacing: 8) {
-                    Text("Suggested Paths")
-                        .font(.subheadline)
-                        .fontWeight(.semibold)
-
-                    VStack(spacing: 8) {
-                        ForEach(suggestedPaths, id: \.self) { path in
-                            SuggestedPathRow(
-                                path: path,
-                                isAdded: viewModel.getMonitoredPaths().contains(path),
-                                onTap: {
-                                    if !viewModel.getMonitoredPaths().contains(path) {
-                                        viewModel.addMonitoredPath(path)
-                                        logger.info("Added monitored path: \(path)")
+                // Suggestions / Existing Paths
+                if selectedPath.isEmpty {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 20) {
+                            // Suggested
+                            if !suggestedPaths.isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Suggested Paths")
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.secondary)
+                                    
+                                    ForEach(suggestedPaths, id: \.self) { path in
+                                        SuggestedPathRow(
+                                            path: path,
+                                            isAdded: viewModel.getMonitoredPaths().contains(path),
+                                            onTap: { selectPath(path) }
+                                        )
                                     }
                                 }
-                            )
-                        }
-                    }
-                }
-
-                // Current monitored paths
-                if !viewModel.getMonitoredPaths().isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Monitored Paths")
-                            .font(.subheadline)
-                            .fontWeight(.semibold)
-
-                        VStack(spacing: 8) {
-                            ForEach(viewModel.getMonitoredPaths(), id: \.self) { path in
-                                MonitoredPathRow(
-                                    path: path,
-                                    onRemove: {
-                                        viewModel.removeMonitoredPath(path)
-                                        logger.info("Removed monitored path: \(path)")
+                            }
+                            
+                            // Monitored
+                            if !viewModel.getMonitoredPaths().isEmpty {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Text("Monitored Paths")
+                                        .font(.subheadline)
+                                        .fontWeight(.semibold)
+                                        .foregroundColor(.secondary)
+                                    
+                                    ForEach(viewModel.getMonitoredPaths(), id: \.self) { path in
+                                        MonitoredPathRow(
+                                            path: path,
+                                            onRemove: {
+                                                viewModel.removeMonitoredPath(path)
+                                                logger.info("Removed monitored path: \(path)")
+                                                // Trigger update
+                                                Task { await viewModel.scanAllProjects() }
+                                            }
+                                        )
                                     }
-                                )
+                                }
                             }
                         }
                     }
@@ -95,33 +134,37 @@ struct AddPathSheet: View {
 
                 Spacer()
 
-                // Action buttons
+                // Actions
                 HStack(spacing: 12) {
-                    Button("Cancel") {
-                        dismiss()
-                    }
-                    .keyboardShortcut(.cancelAction)
-
-                    Button("Browse...") {
-                        isChoosingPath = true
-                    }
-
-                    Spacer()
-
-                    Button("Scan Now") {
-                        // Dismiss FIRST, then trigger scan
-                        // This prevents blocking the UI inside the sheet
-                        dismiss()
-                        Task {
-                            await viewModel.scanAllProjects()
+                    if selectedPath.isEmpty {
+                         Button("Cancel") { dismiss() }
+                             .keyboardShortcut(.cancelAction)
+                        
+                         Spacer()
+                        
+                         Button("Browse Folder...") { isChoosingPath = true }
+                             .buttonStyle(.borderedProminent)
+                    } else {
+                        Button("Cancel") { selectedPath = ""; previewCount = nil }
+                        
+                        Spacer()
+                        
+                        Button("Add & Scan") {
+                            if !viewModel.getMonitoredPaths().contains(selectedPath) {
+                                viewModel.addMonitoredPath(selectedPath)
+                            }
+                            dismiss()
+                            Task {
+                                await viewModel.scanAllProjects()
+                            }
                         }
+                        .disabled(isScanningPreview)
+                        .buttonStyle(.borderedProminent)
                     }
-                    .disabled(viewModel.getMonitoredPaths().isEmpty)
-                    .buttonStyle(.borderedProminent)
                 }
             }
             .padding()
-            .frame(width: 600, height: 500)
+            .frame(width: 600, height: 550)
             .fileImporter(
                 isPresented: $isChoosingPath,
                 allowedContentTypes: [.folder],
@@ -130,10 +173,7 @@ struct AddPathSheet: View {
                 switch result {
                 case .success(let urls):
                     if let url = urls.first {
-                        selectedPath = url.path(percentEncoded: false)
-                        if !viewModel.getMonitoredPaths().contains(selectedPath) {
-                            viewModel.addMonitoredPath(selectedPath)
-                        }
+                        selectPath(url.path(percentEncoded: false))
                     }
                 case .failure(let error):
                     logger.error("Failed to select path: \(error.localizedDescription)")
@@ -141,30 +181,70 @@ struct AddPathSheet: View {
             }
         }
     }
+    
+    private func selectPath(_ path: String) {
+        selectedPath = path
+        previewCount = nil
+        isScanningPreview = true
+        
+        Task {
+            // Quick recursive count logic
+            let count = await countGitRepos(in: path)
+            await MainActor.run {
+                previewCount = count
+                isScanningPreview = false
+            }
+        }
+    }
+    
+    // Quick count without full Project generation
+    private func countGitRepos(in path: String) async -> Int {
+        var count = 0
+        let fileManager = FileManager.default
+        var isDir: ObjCBool = false
+        
+        guard fileManager.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { return 0 }
+        
+        // Check root
+        if fileManager.fileExists(atPath: (path as NSString).appendingPathComponent(".git")) {
+            count += 1
+        }
+        
+        // Check children (depth 1 only for speed in preview? Or match ConfigStore logic?)
+        // ConfigStore logic is depth 1 for subdirectories
+        guard let items = try? fileManager.contentsOfDirectory(atPath: path) else { return count }
+        
+        for item in items {
+            if item.hasPrefix(".") { continue }
+            let itemPath = (path as NSString).appendingPathComponent(item)
+            guard fileManager.fileExists(atPath: itemPath, isDirectory: &isDir), isDir.boolValue else { continue }
+            
+            if fileManager.fileExists(atPath: (itemPath as NSString).appendingPathComponent(".git")) {
+                count += 1
+            }
+        }
+        return count
+    }
 
     private var suggestedPaths: [String] {
         var paths: [String] = []
-
-        // Add common development directories
-        let homeDir = fileManager.homeDirectoryForCurrentUser.path
-
-        // Code directory
-        let codePath = (homeDir as NSString).appendingPathComponent("code")
-        if fileManager.fileExists(atPath: codePath) {
-            paths.append(codePath)
+        let fileManager = FileManager.default
+        let home = fileManager.homeDirectoryForCurrentUser.path
+        
+        // Common paths
+        let candidates = ["code", "Projects", "Development", "src", "git"]
+        
+        for cand in candidates {
+            let p = (home as NSString).appendingPathComponent(cand)
+            if fileManager.fileExists(atPath: p) {
+                paths.append(p)
+            }
         }
-
-        // Projects directory
-        let projectsPath = (homeDir as NSString).appendingPathComponent("Projects")
-        if fileManager.fileExists(atPath: projectsPath) {
-            paths.append(projectsPath)
-        }
-
+        
         // Documents
-        let documentsPath = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first?.path
-        if let docs = documentsPath, fileManager.fileExists(atPath: docs) {
-            paths.append(docs)
-        }
+         if let doc = fileManager.urls(for: .documentDirectory, in: .userDomainMask).first?.path {
+             paths.append(doc)
+         }
 
         return paths
     }
@@ -195,6 +275,9 @@ struct SuggestedPathRow: View {
                 Spacer()
 
                 if isAdded {
+                    Text("Added")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
                     Image(systemName: "checkmark.circle.fill")
                         .foregroundColor(.green)
                 }

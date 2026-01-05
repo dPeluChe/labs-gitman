@@ -22,7 +22,8 @@ let package = Package(
                 "run.sh",
                 "docs",
                 "Tests",
-                "Resources/Info.plist"
+                "Resources/Info.plist",
+                "app_icon_source.png"
             ],
             sources: [
                 "Models",

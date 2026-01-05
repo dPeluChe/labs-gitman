@@ -54,6 +54,8 @@ struct ProjectListView: View {
                                             openInFinderButton(project)
                                             Divider()
                                             copyPathButton(project)
+                                            Divider()
+                                            removeFromListButton(project)
                                         }
                                 }
                             }
@@ -70,6 +72,8 @@ struct ProjectListView: View {
                                             openInFinderButton(project)
                                             Divider()
                                             copyPathButton(project)
+                                            Divider()
+                                            removeFromListButton(project)
                                         }
                                 }
                             }
@@ -183,6 +187,14 @@ struct ProjectListView: View {
         }
     }
     
+    private func removeFromListButton(_ project: Project) -> some View {
+        Button(role: .destructive) {
+            viewModel.ignoreProject(project.path)
+        } label: {
+            Label("Remove from List", systemImage: "trash")
+        }
+    }
+    
     private func openExternalTerminal(path: String) {
         let app = settings.preferredTerminal
         let script = "open -a \"\(app.bundleIdentifier)\" \"\(path)\""
@@ -248,8 +260,8 @@ struct ProjectListView: View {
             
             ForEach(viewModel.missingDependencies, id: \.self) { dep in
                 Text(dep.message)
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.9))
+                .font(.caption)
+                .foregroundColor(.white.opacity(0.9))
             }
         }
         .padding()
@@ -262,13 +274,14 @@ struct ProjectListView: View {
             Image(systemName: icon)
             Text(title)
             Spacer()
+            // Styled count badge
             Text("\(count)")
                 .font(.caption)
-                .foregroundColor(.secondary)
+                .bold()
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
-                .background(Color.secondary.opacity(0.1))
-                .cornerRadius(10)
+                .background(Capsule().fill(Color.secondary.opacity(0.2)))
+                .foregroundColor(.secondary)
         }
         .font(.subheadline)
         .foregroundColor(.primary)

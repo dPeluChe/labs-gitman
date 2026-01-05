@@ -124,14 +124,16 @@ actor GitService {
         async let modified = getModifiedFiles(path: project.path, gitPath: gitPath)
         async let staged = getStagedFiles(path: project.path, gitPath: gitPath)
         async let lastCommit = getLastCommit(path: project.path, gitPath: gitPath)
+        async let branches = getBranches(path: project.path, gitPath: gitPath)
 
-        let (branch, changes, untrackedFiles, modifiedFiles, stagedFiles, commit) = try await (
+        let (branch, changes, untrackedFiles, modifiedFiles, stagedFiles, commit, branchList) = try await (
             currentBranch,
             hasChanges,
             untracked,
             modified,
             staged,
-            lastCommit
+            lastCommit,
+            branches
         )
         
         // Check GitHub integration
@@ -150,7 +152,8 @@ actor GitService {
             lastCommitHash: commit.hash,
             lastCommitMessage: commit.message,
             lastCommitDate: commit.date,
-            hasGitHubRemote: isGitHub
+            hasGitHubRemote: isGitHub,
+            branches: branchList
         )
     }
 
@@ -164,6 +167,45 @@ actor GitService {
         )
 
         return output.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func getBranches(path: String, gitPath: String) async throws -> [GitBranch] {
+        // Output format: refname:short|objectname:short|committerdate:iso-strict|HEAD
+        let format = "%(refname:short)|%(objectname:short)|%(committerdate:iso8601)|%(HEAD)"
+        do {
+            let output = try await processExecutor.execute(
+                command: gitPath,
+                arguments: ["branch", "-v", "--sort=-committerdate", "--format=\(format)"],
+                directory: path
+            )
+            
+            var branches: [GitBranch] = []
+            let lines = output.split(separator: "\n")
+            
+            let dateFormatter = ISO8601DateFormatter()
+            
+            for line in lines {
+                let parts = line.split(separator: "|", omittingEmptySubsequences: false)
+                if parts.count >= 4 {
+                    let name = String(parts[0])
+                    let hash = String(parts[1])
+                    let dateStr = String(parts[2])
+                    let isCurrent = String(parts[3]) == "*"
+                    
+                    let date = dateFormatter.date(from: dateStr)
+                    
+                    branches.append(GitBranch(
+                        name: name,
+                        isCurrent: isCurrent,
+                        lastCommitDate: date,
+                        lastCommitHash: hash
+                    ))
+                }
+            }
+            return branches
+        } catch {
+            return []
+        }
     }
 
     private func hasUncommittedChanges(path: String, gitPath: String) async throws -> Bool {

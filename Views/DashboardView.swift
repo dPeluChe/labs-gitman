@@ -9,7 +9,7 @@ struct DashboardView: View {
                 // Summary Cards
                 LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
                     summaryCard(title: "Total Projects", value: "\(projects.count)", icon: "folder.fill", color: .blue)
-                    summaryCard(title: "Git Repos", value: "\(gitReposCount)", icon: "git.branch", color: .purple)
+                    summaryCard(title: "Git Repos", value: "\(gitReposCount)", icon: "arrow.triangle.branch", color: .purple)
                     summaryCard(title: "Changes", value: "\(projectsWithChanges)", icon: "pencil", color: .orange)
                     summaryCard(title: "Pending PRs", value: "\(totalPRs)", icon: "arrow.triangle.pull", color: .green)
                 }
