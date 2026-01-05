@@ -134,7 +134,19 @@ struct ProjectListView: View {
                 if let errorMessage = viewModel.errorMessage { Text(errorMessage) }
             }
             .onAppear {
-                Task { await viewModel.checkDependencies() }
+                Task {
+                    await viewModel.checkDependencies()
+                    // Auto-scan projects on app launch if:
+                    // 1. No projects loaded yet, OR
+                    // 2. Projects exist but have no gitStatus (never scanned properly)
+                    // 3. Haven't been scanned in last 5 minutes (stale data)
+                    let needsScan = viewModel.projects.isEmpty ||
+                                   viewModel.projects.allSatisfy { $0.gitStatus == nil } ||
+                                   viewModel.projects.contains { $0.gitStatus == nil || $0.lastScanned.timeIntervalSinceNow < -300 }
+                    if needsScan {
+                        await viewModel.scanAllProjects()
+                    }
+                }
             }
             .onAppear {
                 setupKeyboardShortcuts()
