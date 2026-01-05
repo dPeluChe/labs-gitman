@@ -7,13 +7,14 @@ struct ProjectListView: View {
     @State private var showingAddPathSheet = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var searchText = ""
-    
+
     // Filtering & Sorting
     @State private var filterOption: FilterOption = .all
     @State private var sortOption: SortOption = .name
 
     // Selection state handling both Dashboard and Projects
     @State private var selection: SidebarSelection? = .dashboard
+    @FocusState private var focusedSearch: Bool
 
     enum SidebarSelection: Hashable {
         case dashboard
@@ -135,8 +136,20 @@ struct ProjectListView: View {
             .onAppear {
                 Task { await viewModel.checkDependencies() }
             }
-        
+            .onAppear {
+                setupKeyboardShortcuts()
+            }
+
         } detail: {
+            detailContent
+                .onAppear {
+                    setupDetailKeyboardShortcuts()
+                }
+        }
+    }
+
+    private var detailContent: some View {
+        Group {
             switch selection {
             case .dashboard:
                 DashboardView(projects: viewModel.projects, isLoading: viewModel.isScanning)
@@ -151,9 +164,98 @@ struct ProjectListView: View {
             }
         }
     }
-    
+
+    // MARK: - Keyboard Shortcuts
+
+    private func setupKeyboardShortcuts() {
+        // Store the monitor reference to avoid duplicates
+        NSObject.cancelPreviousPerformRequests(withTarget: self)
+    }
+
+    private func setupDetailKeyboardShortcuts() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
+            // ⌘K - Focus search
+            if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "k" {
+                focusedSearch = true
+                return nil
+            }
+
+            // ⌘R - Refresh (all or current project)
+            if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "r" {
+                if case .project(let project, _) = selection {
+                    Task { await viewModel.refreshProjectStatus(project) }
+                } else {
+                    Task { await viewModel.scanAllProjects() }
+                }
+                return nil
+            }
+
+            // ⌘N - Add new path
+            if event.modifierFlags.contains(.command) && event.charactersIgnoringModifiers == "n" {
+                showingAddPathSheet = true
+                return nil
+            }
+
+            // ⌘1-4 - Switch tabs (only when project is selected)
+            if event.modifierFlags.contains(.command),
+               case .project(let project, _) = selection {
+                let tabs: [ProjectDetailView.DetailTab] = [.overview, .files, .terminal, .branches]
+                if let char = event.charactersIgnoringModifiers, let digit = Int(char), digit > 0 && digit <= tabs.count {
+                    selection = .project(project, tab: tabs[digit - 1].rawValue)
+                    return nil
+                }
+            }
+
+            // ESC - Close current view or return to dashboard
+            if event.keyCode == 53 { // ESC key
+                if showingAddPathSheet {
+                    showingAddPathSheet = false
+                } else if case .project = selection {
+                    selection = .dashboard
+                }
+                return nil
+            }
+
+            // ↑↓ - Navigate projects
+            if event.keyCode == 126 || event.keyCode == 125 { // Up/Down arrows
+                navigateProjects(direction: event.keyCode == 126 ? .up : .down)
+                return nil
+            }
+
+            return event
+        }
+    }
+
+    private enum NavigationDirection {
+        case up, down
+    }
+
+    private func navigateProjects(direction: NavigationDirection) {
+        let allProjects = filteredGitRepos + filteredNonGit
+
+        guard let currentIndex = currentProjectIndex(in: allProjects) else { return }
+
+        let newIndex: Int
+        switch direction {
+        case .up:
+            newIndex = max(0, currentIndex - 1)
+        case .down:
+            newIndex = min(allProjects.count - 1, currentIndex + 1)
+        }
+
+        if newIndex >= 0 && newIndex < allProjects.count {
+            let project = allProjects[newIndex]
+            selection = .project(project, tab: nil)
+        }
+    }
+
+    private func currentProjectIndex(in projects: [Project]) -> Int? {
+        guard case .project(let project, _) = selection else { return nil }
+        return projects.firstIndex { $0.path == project.path }
+    }
+
     // MARK: - Context Menu Buttons
-    
+
     private func openInInternalTerminalButton(_ project: Project) -> some View {
         Button {
              selection = .project(project, tab: ProjectDetailView.DetailTab.terminal.rawValue)

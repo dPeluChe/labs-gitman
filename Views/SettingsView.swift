@@ -3,7 +3,8 @@ import SwiftUI
 struct SettingsView: View {
     @ObservedObject var themeManager: ThemeManager
     @StateObject private var settings = SettingsStore()
-    
+    @Environment(\.dismiss) private var dismiss
+
     var body: some View {
         TabView {
             GeneralSettingsView(themeManager: themeManager, settings: settings)
@@ -12,6 +13,19 @@ struct SettingsView: View {
                 }
         }
         .frame(width: 450, height: 300)
+        .onAppear {
+            setupKeyboardShortcuts()
+        }
+    }
+
+    private func setupKeyboardShortcuts() {
+        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+            if event.keyCode == 53 { // ESC key
+                dismiss()
+                return nil
+            }
+            return event
+        }
     }
 }
 
@@ -20,31 +34,50 @@ struct GeneralSettingsView: View {
     @ObservedObject var settings: SettingsStore
     
     var body: some View {
-        Form {
-            Section {
-                Picker("Appearance", selection: $themeManager.currentTheme) {
-                    ForEach(AppTheme.allCases) { theme in
-                        Label(theme.rawValue, systemImage: theme.icon)
-                            .tag(theme)
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    Picker("Appearance", selection: $themeManager.currentTheme) {
+                        ForEach(AppTheme.allCases) { theme in
+                            Label(theme.rawValue, systemImage: theme.icon)
+                                .tag(theme)
+                        }
                     }
+                    .pickerStyle(.inline)
+                } header: {
+                    Text("Display")
                 }
-                .pickerStyle(.inline)
-            } header: {
-                Text("Display")
+                
+                Section {
+                    Picker("Terminal App", selection: $settings.preferredTerminal) {
+                        ForEach(TerminalApp.allCases) { app in
+                            Text(app.rawValue).tag(app)
+                        }
+                    }
+                    .onChange(of: settings.preferredTerminal) { _, newValue in
+                        settings.setPreferredTerminal(newValue)
+                    }
+                } header: {
+                    Text("Integrations")
+                } footer: {
+                    Text("Choose your preferred external terminal application.")
+                }
             }
+            .padding()
             
-            Section {
-                Picker("Terminal App", selection: $settings.preferredTerminal) {
-                    ForEach(TerminalApp.allCases) { app in
-                        Text(app.rawValue).tag(app)
-                    }
+            if settings.showSavedIndicator {
+                HStack {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundColor(.green)
+                    Text(settings.saveMessage)
+                        .font(.caption)
+                    Spacer()
                 }
-            } header: {
-                Text("Integrations")
-            } footer: {
-                Text("Choose your preferred external terminal application.")
+                .padding(.horizontal)
+                .padding(.vertical, 8)
+                .background(Color.green.opacity(0.1))
+                .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
-        .padding()
     }
 }

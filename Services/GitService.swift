@@ -297,6 +297,86 @@ actor GitService {
         }
     }
 
+    func getCommitHistory(path: String, limit: Int = 10) async throws -> [GitCommit] {
+        guard isGitRepository(at: path) else {
+            throw GitError.notAGitRepository
+        }
+
+        let gitPath = await resolveCommandPath("git")
+
+        do {
+            let output = try await processExecutor.execute(
+                command: gitPath,
+                arguments: [
+                    "log",
+                    "-\(limit)",
+                    "--pretty=%H|%an|%ae|%s|%cd",
+                    "--date=iso-strict",
+                    "--abbrev-commit"
+                ],
+                directory: path
+            )
+
+            let formatter = ISO8601DateFormatter()
+            
+            let commits = output.split(separator: "\n").compactMap { line -> GitCommit? in
+                let parts = String(line).components(separatedBy: "|")
+                guard parts.count >= 5 else { return nil }
+
+                let hash = parts[0].prefix(7)
+                let author = parts[1]
+                let email = parts[2]
+                let message = parts[3]
+                let dateString = parts[4]
+
+                if let date = formatter.date(from: dateString) {
+                    return GitCommit(
+                        hash: String(hash),
+                        author: author,
+                        email: email,
+                        message: message,
+                        date: date
+                    )
+                }
+
+                return nil
+            }
+
+            return commits
+        } catch {
+            return []
+        }
+    }
+
+    // MARK: - Branch Switching
+
+    func switchBranch(path: String, branchName: String) async throws {
+        guard isGitRepository(at: path) else {
+            throw GitError.notAGitRepository
+        }
+
+        let gitPath = await resolveCommandPath("git")
+
+        // Check for uncommitted changes
+        let hasChanges = try await hasUncommittedChanges(path: path, gitPath: gitPath)
+
+        if hasChanges {
+            throw GitError.uncommittedChanges
+        }
+
+        // Switch branch
+        let output = try await processExecutor.execute(
+            command: gitPath,
+            arguments: ["checkout", branchName],
+            directory: path
+        )
+
+        // Check for errors
+        if output.lowercased().contains("error") {
+            throw GitError.checkoutFailed(output)
+        }
+    }
+
     // MARK: - GitHub CLI Integration
 
     private func getPendingPullRequestCount(path: String) async -> Int {
@@ -322,9 +402,24 @@ actor GitService {
 
     // MARK: - Errors
 
-    enum GitError: Error {
+    enum GitError: Error, LocalizedError {
         case notAGitRepository
+        case uncommittedChanges
+        case checkoutFailed(String)
         case commandFailed(String)
+
+        var errorDescription: String? {
+            switch self {
+            case .notAGitRepository:
+                return "Not a Git repository"
+            case .uncommittedChanges:
+                return "You have uncommitted changes. Please commit or stash them first."
+            case .checkoutFailed(let message):
+                return "Failed to checkout branch: \(message)"
+            case .commandFailed(let message):
+                return "Command failed: \(message)"
+            }
+        }
     }
 }
 

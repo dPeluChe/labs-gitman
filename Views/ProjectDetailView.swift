@@ -12,7 +12,7 @@ struct ProjectDetailView: View {
         case overview = "Overview"
         case files = "Files"
         case terminal = "Terminal"
-        case branches = "Branches"
+        case branches = "Branches & History"
         var id: String { rawValue }
     }
     
@@ -143,6 +143,7 @@ struct ProjectDetailView: View {
                     .background(Circle().fill(Color.secondary.opacity(0.1)))
             }
             .buttonStyle(.plain)
+            .help("Refresh project (⌘R)")
         }
     }
     
@@ -321,12 +322,25 @@ struct ProjectDetailView: View {
     private func actionButton(title: String, icon: String, color: Color, action: @escaping () -> Void) -> some View {
         Button(action: action) {
             VStack(spacing: 8) {
-                Image(systemName: icon).font(.title2).foregroundColor(color)
-                Text(title).font(.caption).fontWeight(.medium)
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12)
+                        .fill(color.opacity(0.15))
+                        .frame(width: 48, height: 48)
+
+                    Image(systemName: icon)
+                        .font(.system(size: 20))
+                        .foregroundColor(color)
+                }
+
+                Text(title)
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .foregroundColor(.primary)
             }
-            .frame(maxWidth: .infinity).padding(.vertical, 12).background(Color(.controlBackgroundColor)).cornerRadius(10).shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
+            .frame(maxWidth: .infinity)
         }
         .buttonStyle(.plain)
+        .help(title)
     }
 
     private func openInTerminal() {
@@ -336,64 +350,243 @@ struct ProjectDetailView: View {
     }
 }
 
-// Separate Branch View Component
+// Separate Branch View Component with integrated History
 struct BranchesView: View {
     let project: Project
     @State private var searchText = ""
-    
+    @State private var commits: [GitCommit] = []
+    @State private var isLoadingCommits = false
+    @State private var selectedViewMode: ViewMode = .branches
+
+    enum ViewMode: Int {
+        case branches = 0
+        case history = 1
+    }
+
     var body: some View {
-        VStack {
-            if let branches = project.gitStatus?.branches {
-                List {
+        VStack(spacing: 0) {
+            // Segmented picker for view mode
+            Picker("View Mode", selection: $selectedViewMode) {
+                Text("Branches").tag(ViewMode.branches)
+                Text("History").tag(ViewMode.history)
+            }
+            .pickerStyle(.segmented)
+            .padding()
+
+            Divider()
+
+            // Branch List or History Timeline
+            if selectedViewMode == .branches {
+                branchesList
+            } else {
+                commitTimeline
+            }
+        }
+        .task {
+            await loadCommitHistory()
+        }
+    }
+
+    private var branchesList: some View {
+        ScrollView {
+            VStack(spacing: 0) {
+                if let branches = project.gitStatus?.branches {
                     ForEach(filterBranches(branches), id: \.name) { branch in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                HStack {
-                                    if branch.isCurrent {
-                                        Image(systemName: "checkmark.circle.fill")
-                                            .foregroundColor(.green)
-                                            .font(.caption)
-                                    }
-                                    Text(branch.name)
-                                        .font(.headline)
-                                        .fontWeight(branch.isCurrent ? .bold : .medium)
-                                }
-                                
-                                if let hash = branch.lastCommitHash {
-                                    Text(hash.prefix(7))
-                                        .font(.caption)
-                                        .monospaced()
-                                        .foregroundColor(.secondary)
-                                }
-                            }
-                            
-                            Spacer()
-                            
-                            if let date = branch.lastCommitDate {
-                                Text(relativeTime(date))
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
+                        branchRow(branch)
+                        Divider()
+                    }
+                } else {
+                    Text("No branch info available")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+        }
+        .task {
+            await loadCommitHistory()
+        }
+    }
+
+    private var commitTimeline: some View {
+        Group {
+            if isLoadingCommits {
+                loadingView
+            } else if commits.isEmpty {
+                Text("No commits found")
+                    .foregroundColor(.secondary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(commits.enumerated()), id: \.element) { index, commit in
+                            commitRow(commit, index: index)
+                            if index < commits.count - 1 {
+                                connectorLine
                             }
                         }
-                        .padding(.vertical, 4)
+                        .padding(.vertical, 8)
                     }
                 }
-                .searchable(text: $searchText, prompt: "Search branches...")
-            } else {
-                Text("No branch info available")
-                    .foregroundColor(.secondary)
             }
         }
     }
-    
+
+    private func branchRow(_ branch: GitBranch) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    if branch.isCurrent {
+                        Image(systemName: "checkmark.circle.fill")
+                            .foregroundColor(.green)
+                            .font(.caption)
+                    }
+                    Text(branch.name)
+                        .font(.headline)
+                        .fontWeight(branch.isCurrent ? .bold : .medium)
+                }
+
+                if let hash = branch.lastCommitHash {
+                    HStack(spacing: 4) {
+                        Image(systemName: "clock")
+                            .font(.system(size: 10))
+                        Text(hash.prefix(7))
+                            .font(.caption)
+                            .monospaced()
+                            .foregroundColor(.secondary)
+                    }
+                }
+            }
+
+            Spacer()
+
+            if let date = branch.lastCommitDate {
+                Text(relativeTime(date))
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle())
+        .contextMenu {
+            Button("Switch to Branch") {
+                Task {
+                    await switchBranch(branch.name)
+                }
+            }
+        }
+    }
+
+    private func commitRow(_ commit: GitCommit, index: Int) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            // Timeline dot
+            ZStack {
+                Circle()
+                    .fill(index == 0 ? Color.accentColor : Color.secondary.opacity(0.3))
+                    .frame(width: 12, height: 12)
+
+                if index == 0 {
+                    Circle()
+                        .stroke(Color.white, lineWidth: 2)
+                        .frame(width: 12, height: 12)
+                }
+            }
+            .frame(width: 12, height: 12)
+
+            // Commit content
+            VStack(alignment: .leading, spacing: 6) {
+                // Hash and author
+                HStack {
+                    Text(commit.hash)
+                        .font(.system(.caption, design: .monospaced))
+                        .foregroundColor(.accentColor)
+                        .fontWeight(.medium)
+
+                    Spacer()
+
+                    Text(relativeTime(commit.date))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+
+                // Message
+                Text(commit.message)
+                    .font(.body)
+                    .foregroundColor(.primary)
+                    .lineLimit(2)
+
+                // Author
+                HStack(spacing: 4) {
+                    Image(systemName: "person.circle.fill")
+                        .font(.system(size: 12))
+                    Text(commit.author)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+            .padding(.vertical, 4)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal)
+    }
+
+    private var connectorLine: some View {
+        HStack(spacing: 0) {
+            Rectangle()
+                .fill(Color.secondary.opacity(0.3))
+                .frame(width: 2)
+            Spacer()
+        }
+        .frame(height: 20)
+        .padding(.leading, 5)
+    }
+
+    private var loadingView: some View {
+        VStack(spacing: 12) {
+            ProgressView()
+            Text("Loading commit history...")
+                .font(.caption)
+                .foregroundColor(.secondary)
+        }
+        .frame(maxWidth: .infinity, minHeight: 150)
+    }
+
     private func filterBranches(_ branches: [GitBranch]) -> [GitBranch] {
         if searchText.isEmpty { return branches }
         return branches.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
     }
-    
+
     private func relativeTime(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .full
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private func loadCommitHistory() async {
+        isLoadingCommits = true
+        defer { isLoadingCommits = false }
+
+        let gitService = GitService()
+        do {
+            commits = try await gitService.getCommitHistory(path: project.path, limit: 15)
+        } catch {
+            print("Error loading commits: \(error)")
+        }
+    }
+
+    @MainActor
+    private func switchBranch(_ branchName: String) async {
+        let gitService = GitService()
+        
+        do {
+            try await gitService.switchBranch(path: project.path, branchName: branchName)
+            // Refresh project status after switching
+            // This will be handled by the parent view's refresh mechanism
+        } catch GitService.GitError.uncommittedChanges {
+            print("Cannot switch: uncommitted changes")
+        } catch {
+            print("Failed to switch branch: \(error.localizedDescription)")
+        }
     }
 }

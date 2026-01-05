@@ -62,10 +62,12 @@ struct TerminalTextField: NSViewRepresentable {
 struct TerminalView: View {
     let projectPath: String
     @StateObject private var vm = TerminalViewModel()
+    @StateObject private var settings = SettingsStore()
     @State private var inputCommand: String = ""
     @State private var history: [String] = []
     @State private var historyIndex = -1
-    
+    @FocusState private var isInputFocused: Bool
+
     var body: some View {
         VStack(spacing: 0) {
             // Output Area
@@ -76,7 +78,7 @@ struct TerminalView: View {
                             // Empty state placeholder
                             VStack(spacing: 12) {
                                 Spacer()
-                                Image(systemName: "chevron.left.forwardslash.chevron.right.forwardslash")
+                                Image(systemName: "terminal")
                                     .font(.system(size: 40))
                                     .foregroundColor(.gray)
                                 Text("Terminal Ready")
@@ -101,7 +103,7 @@ struct TerminalView: View {
                     }
                     .padding()
                 }
-                .onChange(of: vm.outputLines.count) { _ in
+                .onChange(of: vm.outputLines.count) { oldValue, newValue in
                     if let last = vm.outputLines.last {
                         proxy.scrollTo(last.id, anchor: .bottom)
                     }
@@ -114,24 +116,36 @@ struct TerminalView: View {
             HStack {
                 Text(">")
                     .font(.monospaced(.body)())
-                
+
                 TerminalTextField(
                     text: $inputCommand,
                     onCommit: executeCommand,
                     onHistoryUp: historyUp,
                     onHistoryDown: historyDown
                 )
+                .focused($isInputFocused)
                 .frame(height: 20)
-                
+                .onAppear {
+                    isInputFocused = true
+                }
+
                 if vm.isRunning {
                     ProgressView()
                         .controlSize(.small)
                         .padding(.horizontal, 4)
                 }
+
+                // Open in External Terminal button
+                Button(action: openExternalTerminal) {
+                    Image(systemName: "terminal")
+                        .font(.system(size: 14))
+                }
+                .help("Open in \(settings.preferredTerminal.rawValue)")
+                .buttonStyle(.borderless)
             }
             .padding(10)
             .background(Color(.controlBackgroundColor))
-            
+
             // Usage Toolbar (Common Commands)
             HStack {
                 quickAction("Git Status", cmd: "git status")
@@ -139,7 +153,11 @@ struct TerminalView: View {
                 quickAction("List Files", cmd: "ls -la")
                 quickAction("Build", cmd: "swift build")
                 Spacer()
+
                 Button("Clear") { vm.clear() }
+                    .font(.caption)
+
+                Button("Open External") { openExternalTerminal() }
                     .font(.caption)
             }
             .padding(8)
@@ -200,6 +218,16 @@ struct TerminalView: View {
             historyIndex = history.count
             inputCommand = ""
         }
+    }
+
+    private func openExternalTerminal() {
+        let app = settings.preferredTerminal
+        let script = "open -a \"\(app.bundleIdentifier)\" \"\(projectPath)\""
+        
+        let task = Process()
+        task.launchPath = "/bin/zsh"
+        task.arguments = ["-c", script]
+        task.launch()
     }
 }
 

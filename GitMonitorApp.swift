@@ -4,11 +4,13 @@ import SwiftUI
 struct GitMonitorApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @StateObject private var themeManager = ThemeManager()
+    @StateObject private var viewModel = ProjectScannerViewModel()
 
     var body: some Scene {
         WindowGroup {
             ProjectListView()
                 .environmentObject(themeManager)
+                .environmentObject(viewModel)
                 .preferredColorScheme(themeManager.currentTheme.colorScheme)
         }
         .windowStyle(.hiddenTitleBar)
@@ -16,6 +18,10 @@ struct GitMonitorApp: App {
 
         Settings {
             SettingsView(themeManager: themeManager)
+        }
+
+        MenuBarExtra("GitMonitor", systemImage: "arrow.triangle.branch") {
+            MenuBarContentView(viewModel: viewModel)
         }
     }
 }

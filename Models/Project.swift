@@ -108,3 +108,13 @@ struct GitStatus: Codable, Hashable {
         case needsAttention
     }
 }
+
+/// Individual commit information
+struct GitCommit: Identifiable, Codable, Hashable {
+    var id: String { hash }
+    let hash: String
+    let author: String
+    let email: String
+    let message: String
+    let date: Date
+}

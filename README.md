@@ -14,6 +14,12 @@ A native macOS application for monitoring multiple Git projects with AI-powered 
 - 🤖 **AI-Powered Analysis** - Analyze build output, code quality, and git status with LLMs
 - 🔑 **BYOK Support** - Bring Your Own Key (GLM-4.7) or use local Ollama
 - 🍎 **Native macOS** - Built with SwiftUI for optimal performance and native look & feel
+- ⌨️ **Keyboard Shortcuts** - Comprehensive shortcuts for power users (⌘1-4, ⌘R, ESC, etc.)
+- 📊 **MenuBar Integration** - Quick access from menu bar with project summary
+- 🔄 **Branch Management** - Switch branches directly from the UI
+- 🖥️ **Integrated Terminal** - Built-in terminal with external app integration
+- ⚡ **Commit Timeline** - Visual history of commits with detailed information
+- 🧪 **Unit Tests** - Comprehensive test coverage for core functionality
 
 ## 🎯 Quick Start
 
@@ -77,10 +83,17 @@ Click **Scan** button to:
 ### 3. View Project Details
 
 Select any project to see:
-- **Branch Information**: Current branch and last commit
-- **Changes**: Modified, staged, and untracked files
-- **Pull Requests**: Pending PR count (via GitHub CLI)
-- **Actions**: Open in Finder/Terminal, AI analysis
+- **Overview**: Git statistics, changes summary, commit info
+- **Files**: Built-in file explorer for the project
+- **Terminal**: Integrated terminal with:
+  - Auto-focused command input
+  - Quick actions (Git Status, Log, List Files, Build)
+  - Open in external terminal (uses configured app: Ghostty, iTerm2, etc.)
+- **Branches & History**: 
+  - View all branches with status indicators
+  - Switch branches via context menu
+  - Visual commit timeline with author, date, and message
+- **Actions**: Open in Finder, AI analysis, external terminal
 
 ### 4. AI Analysis
 
@@ -236,15 +249,28 @@ After extensive research comparing Swift/SwiftUI, Tauri (Rust), and Electron:
 - [x] SwiftUI interface
 - [x] Configuration persistence
 
+### ✅ Recent Enhancements (v1.1)
+- [x] MenuBarExtra integration with project summary
+- [x] Unified Branches & History tab with toggle
+- [x] Complete keyboard shortcuts system (⌘1-4, ⌘R, ESC, ⌘K, ⌘N)
+- [x] Tooltips on all actionable buttons
+- [x] Integrated terminal with auto-focus
+- [x] External terminal configuration (Ghostty, iTerm2, Warp, etc.)
+- [x] Branch switching from UI
+- [x] Unit tests for GitService
+- [x] Visual commit timeline
+- [x] ESC key to close modals
+- [x] Settings persistence with visual feedback
+
 ### 🚧 Next Steps
-- [ ] Menu bar integration (MenuBarExtra)
+- [ ] Lazy loading for large project sets
+- [ ] Git status caching with intelligent invalidation
+- [ ] Concurrent scanning with rate limiting
 - [ ] Auto-refresh on file changes
-- [ ] Build/test command execution
 - [ ] Custom LLM prompts per project
 - [ ] Export analysis reports
-- [ ] Notification support
-- [ ] Unit tests
-- [ ] Performance metrics
+- [ ] Notification support for PRs and changes
+- [ ] Performance metrics dashboard
 
 ## 🐛 Troubleshooting
 
