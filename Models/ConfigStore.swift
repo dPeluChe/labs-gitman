@@ -71,7 +71,7 @@ class ConfigStore: ObservableObject {
         var discoveredProjects: [Project] = []
 
         for path in monitoredPaths {
-            logger.info("Scanning monitored path: \(path)")
+            logger.debug("Scanning monitored path: \(path)")
             let projectsInPath = await scanPathForProjects(path)
             discoveredProjects.append(contentsOf: projectsInPath)
         }
@@ -98,8 +98,8 @@ class ConfigStore: ObservableObject {
         projects.removeAll { project in
             !discoveredProjects.contains(where: { $0.path == project.path })
         }
-        
-        logger.info("Total projects after scan: \(self.projects.count)")
+
+        logger.debug("Total projects after scan: \(self.projects.count)")
         return projects
     }
 
@@ -112,57 +112,106 @@ class ConfigStore: ObservableObject {
             return []
         }
 
-        // If the path itself is a git repo, return it as a project
-        let gitPath = (path as NSString).appendingPathComponent(".git")
-        if fileManager.fileExists(atPath: gitPath) {
-            if ignoredPaths.contains(path) { return [] } // Skip ignored
-            
-            logger.info("Found git repo at root: \(path)")
+        // 1. If the monitored path itself is a git repo, return it as a single root item
+        if isGitRepo(path) {
+            if ignoredPaths.contains(path) { return [] }
+            logger.debug("Found git repo at root: \(path)")
             var project = Project(path: path)
             project.isGitRepository = true
             return [project]
         }
 
-        // Otherwise, scan for subdirectories that are git repos
-        var projects: [Project] = []
-
-        guard let contents = try? fileManager.contentsOfDirectory(
-            atPath: path
-        ) else {
+        // 2. Scan immediate children to build the hierarchy
+        var childProjects: [Project] = []
+        
+        let url = URL(fileURLWithPath: path)
+        let keys: [URLResourceKey] = [.isDirectoryKey, .nameKey]
+        
+        guard let contents = try? fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else {
             logger.error("Failed to list contents of: \(path)")
             return []
         }
-
-        for item in contents {
-            let itemPath = (path as NSString).appendingPathComponent(item)
+        
+        for folderURL in contents {
+            let itemPath = folderURL.path
+            let name = folderURL.lastPathComponent
             
-            if ignoredPaths.contains(itemPath) { continue } // Skip ignored
-
+            // Skip system/common ignored items
+            if ignoredPaths.contains(itemPath) || name.hasPrefix(".") || ["node_modules", "Pods", "build", "dist"].contains(name) { continue }
+            
             var isDir: ObjCBool = false
-            guard fileManager.fileExists(atPath: itemPath, isDirectory: &isDir),
-                  isDir.boolValue else {
-                continue
-            }
-
-            // Skip hidden directories
-            if item.hasPrefix(".") {
-                continue
-            }
-
-            let itemGitPath = (itemPath as NSString).appendingPathComponent(".git")
-            if fileManager.fileExists(atPath: itemGitPath) {
-                logger.info("Found submodule/repo: \(itemPath)")
-                var project = Project(path: itemPath)
-                project.isGitRepository = true
-                projects.append(project)
+            guard fileManager.fileExists(atPath: itemPath, isDirectory: &isDir), isDir.boolValue else { continue }
+            
+            if isGitRepo(itemPath) {
+                // Case 1: Direct Git Repository
+                childProjects.append(Project(path: itemPath, isGitRepository: true))
             } else {
-                // Keep as non-git project
-                let project = Project(path: itemPath)
-                projects.append(project)
+                // Case 2: Folder. Check if it contains repos (Workspace) or is empty/files (Folder)
+                let subRepos = findGitRepositoriesRecursively(in: folderURL, currentDepth: 0, maxDepth: 2) // Limited depth for internal workspaces
+                
+                if !subRepos.isEmpty {
+                    // Feature: Internal Workspace (Folder containing repos)
+                    // We flatten the repos found inside this folder into this workspace's subSubjects
+                    var workspace = Project(path: itemPath, isGitRepository: false, isWorkspace: true)
+                    workspace.subProjects = subRepos.sorted { $0.name < $1.name }
+                    childProjects.append(workspace)
+                } else {
+                    // Feature: Non-Repo Folder (for review)
+                    // We add it only if it's not strictly ignored. The user requested to see "folders".
+                    // To avoid too much noise, we could filter empty folders, but let's show them for now.
+                    childProjects.append(Project(path: itemPath, isGitRepository: false))
+                }
             }
         }
 
-        return projects
+        // Create the Root Project (The Monitored Path) acting as the Top-Level Workspace
+        var rootProject = Project(path: path, isGitRepository: false, isWorkspace: true, isRoot: true)
+        rootProject.subProjects = childProjects.sorted { $0.name < $1.name }
+        
+        return [rootProject]
+    }
+    
+    /// Recursively find git repositories in a directory
+    private func findGitRepositoriesRecursively(in rootURL: URL, currentDepth: Int, maxDepth: Int) -> [Project] {
+        if currentDepth >= maxDepth { return [] }
+        
+        var foundProjects: [Project] = []
+        let keys: [URLResourceKey] = [.isDirectoryKey]
+        
+        guard let contents = try? fileManager.contentsOfDirectory(at: rootURL, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else {
+            return []
+        }
+        
+        for url in contents {
+            let path = url.path
+            
+            // Skip common dependency/build folders to improve performance and reduce noise
+            if ["node_modules", "Pods", "Carthage", ".build", "build", "dist", "vendor", "venv", ".env"].contains(url.lastPathComponent) {
+                continue
+            }
+            
+            if ignoredPaths.contains(path) { continue }
+            
+            var isDir: ObjCBool = false
+            guard fileManager.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { continue }
+            
+            if isGitRepo(path) {
+                // Found one! Add it and do NOT recurse inside it (submodules handled by git)
+                foundProjects.append(Project(path: path, isGitRepository: true))
+            } else {
+                // Recurse deeper
+                let deeperProjects = findGitRepositoriesRecursively(in: url, currentDepth: currentDepth + 1, maxDepth: maxDepth)
+                foundProjects.append(contentsOf: deeperProjects)
+            }
+        }
+        
+        return foundProjects
+    }
+
+    private func isGitRepo(_ path: String) -> Bool {
+        let gitPath = (path as NSString).appendingPathComponent(".git")
+        var isDir: ObjCBool = false
+        return fileManager.fileExists(atPath: gitPath, isDirectory: &isDir)
     }
 
     // MARK: - Project Management

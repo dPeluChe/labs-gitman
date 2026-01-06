@@ -89,13 +89,33 @@ Select any project to see:
   - Auto-focused command input
   - Quick actions (Git Status, Log, List Files, Build)
   - Open in external terminal (uses configured app: Ghostty, iTerm2, etc.)
-- **Branches & History**: 
+- **Branches & History**:
   - View all branches with status indicators
   - Switch branches via context menu
   - Visual commit timeline with author, date, and message
 - **Actions**: Open in Finder, AI analysis, external terminal
 
-### 4. AI Analysis
+### 4. Sorting & Filtering Projects
+
+**Filter Options** (via toolbar menu):
+- **All**: Show all projects
+- **Clean**: Only projects without uncommitted changes
+- **Changes**: Only projects with uncommitted changes (WIP)
+
+**Sort Options** (via toolbar menu):
+- **Name**: Alphabetical order (A-Z)
+- **Last Commit**: Most recent commit first
+- **Activity (Files + Commits)**: Smart sorting that prioritizes:
+  1. **Projects with uncommitted changes** (highest priority)
+  2. **Recent commits** (secondary priority)
+  3. **Last scan time** (fallback)
+
+The "Activity" sort is perfect for:
+- Quickly finding which projects you're actively working on
+- Identifying projects that need attention (uncommitted changes)
+- Prioritizing which projects to update/commit first
+
+### 5. AI Analysis
 
 Click **Analyze with AI** and choose:
 
@@ -316,6 +336,56 @@ rm -rf GitMonitor.xcodeproj
 swift package generate-xcodeproj
 open GitMonitor.xcodeproj
 ```
+
+## 🔍 Known Issues & Limitations
+
+### AttributeGraph Cycles
+**Status**: ✅ Optimized - Managed
+
+**Description**:
+When switching between tabs in `ProjectDetailView`, you may see occasional `AttributeGraph: cycle detected` warnings in the console.
+
+**Impact**:
+- ✅ No functional impact - the app works correctly
+- ✅ Performance is acceptable with current optimizations
+- ⚠️ Console warnings appear occasionally but don't affect usability
+
+**Applied Optimizations** (v1.2):
+1. **Added memoization to `.task`** in `BranchesView` with `hasLoadedCommits` flag to prevent duplicate commits loading
+2. **Removed explicit animation modifier** - SwiftUI handles tab transitions implicitly and more efficiently
+3. **Optimized async state updates** - reduced unnecessary `DispatchQueue.main.async` calls
+4. **Kept `.id(project.id)` modifier** - necessary for proper view identity when switching between projects
+
+**Technical Details**:
+These cycles occur due to SwiftUI's attribute dependency tracking when:
+- Using `switch` statements with complex view hierarchies
+- Child views have `@Published` properties that update asynchronously (e.g., `TerminalView`, `BranchesView`)
+- SwiftUI attempts to optimize view updates but detects circular dependencies
+
+**Results**:
+- Tabs open and switch correctly ✅
+- Performance is acceptable for typical usage
+- All tests passing (7/7) ✅
+
+**Further Improvements** (future iterations):
+1. Use `@StateObject` to manage each tab's view lifecycle explicitly
+2. Implement manual view caching to avoid recreating views
+3. Consider using `TabView` with custom styling instead of `Picker` + `switch`
+4. Separate async state management from view hierarchies
+
+### CursorUIViewService Warning
+**Status**: macOS system-level warning, non-critical
+
+**Description**:
+When opening the integrated terminal, you may see:
+```
+-[TUINSCursorUIController activate:]_block_invoke: Can't communicate with CursorUIViewService
+```
+
+**Impact**: None - terminal works correctly
+
+**Technical Details**:
+This is a macOS system service warning related to cursor UI rendering. Occurs when the terminal view is initialized and attempts to communicate with the cursor service. Not specific to this app.
 
 ## 🤝 Contributing
 

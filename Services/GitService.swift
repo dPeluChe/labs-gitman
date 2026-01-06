@@ -111,6 +111,9 @@ actor GitService {
 
     // MARK: - Git Status
 
+    /// Get full git status for a project
+    /// Executes all git commands for complete information (~10 commands)
+    /// Use this when: user opens project detail, explicit refresh, or periodic full scan
     func getStatus(for project: Project) async throws -> GitStatus {
         guard isGitRepository(at: project.path) else {
             throw GitError.notAGitRepository
@@ -161,6 +164,42 @@ actor GitService {
             branches: branchList
         )
     }
+    
+    /// Get lightweight git status for quick refreshes
+    /// Only executes essential commands (3 instead of 10) for faster updates
+    /// Reuses cached data when available
+    /// Use this when: app startup, background refresh, or quick status check
+    func getLightStatus(for project: Project, cachedStatus: GitStatus?) async throws -> GitStatus {
+        guard isGitRepository(at: project.path) else {
+            throw GitError.notAGitRepository
+        }
+        
+        let gitPath = await resolveCommandPath("git")
+        
+        // Execute only essential commands in parallel
+        async let currentBranch = getCurrentBranch(path: project.path, gitPath: gitPath)
+        async let hasChanges = hasUncommittedChanges(path: project.path, gitPath: gitPath)
+        async let lastCommit = getLastCommit(path: project.path, gitPath: gitPath)
+        
+        let (branch, changes, commit) = try await (currentBranch, hasChanges, lastCommit)
+        
+        // Reuse cached data for non-critical info, or use defaults
+        return GitStatus(
+            currentBranch: branch,
+            hasUncommittedChanges: changes,
+            untrackedFiles: cachedStatus?.untrackedFiles ?? [],
+            modifiedFiles: cachedStatus?.modifiedFiles ?? [],
+            stagedFiles: cachedStatus?.stagedFiles ?? [],
+            pendingPullRequests: cachedStatus?.pendingPullRequests ?? 0,
+            lastCommitHash: commit.hash,
+            lastCommitMessage: commit.message,
+            lastCommitDate: commit.date,
+            hasGitHubRemote: cachedStatus?.hasGitHubRemote ?? false,
+            incomingCommits: cachedStatus?.incomingCommits ?? 0,
+            outgoingCommits: cachedStatus?.outgoingCommits ?? 0,
+            branches: cachedStatus?.branches ?? []
+        )
+    }
 
     private func getBehindAheadCounts(path: String, gitPath: String) async throws -> (behind: Int, ahead: Int) {
         do {
@@ -195,13 +234,17 @@ actor GitService {
     // MARK: - Git Operations
 
     private func getCurrentBranch(path: String, gitPath: String) async throws -> String {
-        let output = try await processExecutor.execute(
-            command: gitPath,
-            arguments: ["rev-parse", "--abbrev-ref", "HEAD"],
-            directory: path
-        )
-
-        return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            let output = try await processExecutor.execute(
+                command: gitPath,
+                arguments: ["rev-parse", "--abbrev-ref", "HEAD"],
+                directory: path
+            )
+            return output.trimmingCharacters(in: .whitespacesAndNewlines)
+        } catch {
+             // Handle empty repository (no HEAD yet)
+             return "No Branch (Empty)"
+        }
     }
 
     private func getBranches(path: String, gitPath: String) async throws -> [GitBranch] {
@@ -309,14 +352,14 @@ actor GitService {
 
             let logOutput = try await processExecutor.execute(
                 command: gitPath,
-                arguments: ["log", "-1", "--pretty=%s|%cd", "--date=iso-strict"],
+                arguments: ["log", "-1", "--pretty=format:%B|||GITMAN|||%cd", "--date=iso-strict"],
                 directory: path
             )
             
             let trimmedLog = logOutput.trimmingCharacters(in: .whitespacesAndNewlines)
-            let parts = trimmedLog.components(separatedBy: "|")
+            let parts = trimmedLog.components(separatedBy: "|||GITMAN|||")
             
-            let message = parts.first ?? ""
+            let message = parts.first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let dateString = parts.count > 1 ? parts[1] : ""
             
             let formatter = ISO8601DateFormatter()

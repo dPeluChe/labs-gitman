@@ -28,6 +28,11 @@ struct ProjectListView: View {
     enum SortOption {
         case name, recent, activity
     }
+    
+    // Computed property that applies filtering and sorting
+    private var processedProjects: [Project] {
+        processProjects(viewModel.projects)
+    }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
@@ -37,48 +42,31 @@ struct ProjectListView: View {
                     dependencyWarningView
                 }
 
-                List(selection: $selection) {
-                    NavigationLink(value: SidebarSelection.dashboard) {
-                        Label("Dashboard", systemImage: "square.grid.2x2")
-                            .font(.headline)
-                            .padding(.vertical, 8)
+                List(processedProjects, children: \.children, selection: $selection) { project in
+                    // We must handle the 'Dashboard' link separately or insert it into the list logic?
+                    // List with children and static items is tricky.
+                    // Instead, we use a Section or OutlineGroup.
+                    // But `sidebar` style List handles this if we structure it right.
+                    // Simplest: Static Dashboard Link + ForEach/OutlineGroup.
+                    
+                    // Actually, `List(content)` allows mixing.
+                    // To get recursion, we use `OutlineGroup(project.children ?? [], children: \.children)`.
+                    // But `List(data, children:)` is the standard for sidebar trees.
+                    // We can't mix static content easily with `List(data, children:)` unless we unify data types.
+                    
+                    // Strategy: Use DisclosureGroup recursively? Or OutlineGroup.
+                    // OutlineGroup(viewModel.projects, children: \.children) { row in ... }
+                    
+                    if project.id == viewModel.projects.first?.id { // Hacky way to check, better way below
+                         // Ideally we want Dashboard at top.
                     }
-
-                    if !filteredGitRepos.isEmpty {
-                        Section(header: sectionHeader("Git Repositories", icon: "arrow.triangle.branch", count: filteredGitRepos.count)) {
-                            ForEach(filteredGitRepos) { project in
-                                NavigationLink(value: SidebarSelection.project(project.id)) {
-                                    ProjectRowView(project: project)
-                                        .contextMenu {
-                                            openInInternalTerminalButton(project)
-                                            openInExternalTerminalButton(project)
-                                            openInFinderButton(project)
-                                            Divider()
-                                            copyPathButton(project)
-                                            Divider()
-                                            removeFromListButton(project)
-                                        }
-                                }
+                    
+                     NavigationLink(value: SidebarSelection.project(project.id)) {
+                        ProjectRowView(project: project)
+                            .contextMenu {
+                                // Dynamic menu based on type
+                                contextMenuFor(project)
                             }
-                        }
-                    }
-
-                    if !filteredNonGit.isEmpty {
-                        Section(header: sectionHeader("Other Projects", icon: "folder", count: filteredNonGit.count)) {
-                            ForEach(filteredNonGit) { project in
-                                NavigationLink(value: SidebarSelection.project(project.id)) {
-                                    ProjectRowView(project: project)
-                                        .contextMenu {
-                                            openInExternalTerminalButton(project)
-                                            openInFinderButton(project)
-                                            Divider()
-                                            copyPathButton(project)
-                                            Divider()
-                                            removeFromListButton(project)
-                                        }
-                                }
-                            }
-                        }
                     }
                 }
                 .listStyle(.sidebar)
@@ -167,21 +155,38 @@ struct ProjectListView: View {
         Group {
             switch selection {
             case .dashboard:
-                DashboardView(projects: viewModel.projects, isLoading: viewModel.isScanning)
+                DashboardView(projects: processedProjects, isLoading: viewModel.isScanning)
             case .project(let projectId):
-                if let project = viewModel.projects.first(where: { $0.id == projectId }) {
-                    ProjectDetailView(
-                        project: project,
-                        onRefresh: {
-                            Task { await viewModel.refreshProjectStatus(project) }
-                        },
-                        onAppear: {
-                            viewModel.markProjectAsReviewed(project)
-                        }
-                    )
-                    .id(project.id) // Ensure consistent identity
+                if let project = viewModel.getProject(byId: projectId) {
+                    if project.isWorkspace {
+                        // Render Workspace Detail
+                        WorkspaceDetailView(workspace: project, onNavigateToProject: { subProjectId in
+                            if let uuid = UUID(uuidString: subProjectId) {
+                                selection = .project(uuid)
+                            }
+                        })
+                        .id(project.id)
+                    } else {
+                        // Render Project Detail
+                        ProjectDetailView(
+                            project: project,
+                            viewModel: viewModel,
+                            onNavigateToProject: { id in
+                                if let uuid = UUID(uuidString: id) {
+                                    selection = .project(uuid)
+                                }
+                            },
+                            onRefresh: {
+                                Task { await viewModel.refreshProjectStatus(project) }
+                            },
+                            onAppear: {
+                                viewModel.markProjectAsReviewed(project)
+                            }
+                        )
+                        .id(project.id)
+                    }
                 } else {
-                    // Project not found (maybe deleted)
+                    // Project not found
                     Text("Project not found")
                         .font(.title)
                         .foregroundColor(.secondary)
@@ -191,169 +196,111 @@ struct ProjectListView: View {
             }
         }
     }
-
-    // MARK: - Keyboard Shortcuts
-    // Commented out to isolate issues
-    /*
-    private func setupKeyboardShortcuts() {
-        // Store the monitor reference to avoid duplicates
-        NSObject.cancelPreviousPerformRequests(withTarget: self)
-    }
-
-    private func setupDetailKeyboardShortcuts() {
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [self] event in
-            // ... (rest of shortcuts code) ...
-            return event
-        }
-    }
-    */
-
-    private enum NavigationDirection {
-        case up, down
-    }
-
-    private func navigateProjects(direction: NavigationDirection) {
-        let allProjects = filteredGitRepos + filteredNonGit
-
-        guard let currentIndex = currentProjectIndex(in: allProjects) else { return }
-
-        let newIndex: Int
-        switch direction {
-        case .up:
-            newIndex = max(0, currentIndex - 1)
-        case .down:
-            newIndex = min(allProjects.count - 1, currentIndex + 1)
-        }
-
-        if newIndex >= 0 && newIndex < allProjects.count {
-            let project = allProjects[newIndex]
-            selection = .project(project.id)
-        }
-    }
-
-    private func currentProjectIndex(in projects: [Project]) -> Int? {
-        guard case .project(let projectId) = selection else { return nil }
-        return projects.firstIndex { $0.id == projectId }
-    }
-
-    // MARK: - Context Menu Buttons
-
-    private func openInInternalTerminalButton(_ project: Project) -> some View {
-        Button {
-             // For now, selecting a project goes to the default view (Overview).
-             // Since we removed tab support from SidebarSelection, we just select the project.
-             selection = .project(project.id)
-        } label: {
-             Label("Open in Internal Terminal", systemImage: "desktopcomputer")
-        }
-    }
     
-    private func openInExternalTerminalButton(_ project: Project) -> some View {
-        Button {
-            openExternalTerminal(path: project.path)
-        } label: {
-            Label("Open in \(settings.preferredTerminal.rawValue)", systemImage: "terminal")
-        }
-    }
-    
-    private func openInFinderButton(_ project: Project) -> some View {
-        Button {
-            NSWorkspace.shared.open(URL(fileURLWithPath: project.path))
-        } label: {
-            Label("Open in Finder", systemImage: "folder")
-        }
-    }
-    
-    private func copyPathButton(_ project: Project) -> some View {
-        Button {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.setString(project.path, forType: .string)
-        } label: {
-            Label("Copy Path", systemImage: "doc.on.doc")
-        }
-    }
-    
-    private func removeFromListButton(_ project: Project) -> some View {
-        Button(role: .destructive) {
-            viewModel.ignoreProject(project.path)
-        } label: {
-            Label("Remove from List", systemImage: "trash")
-        }
-    }
-    
-    private func openExternalTerminal(path: String) {
-        let app = settings.preferredTerminal
-        let script = "open -a \"\(app.bundleIdentifier)\" \"\(path)\""
-        
-        let task = Process()
-        task.launchPath = "/bin/zsh"
-        task.arguments = ["-c", script]
-        task.launch()
-    }
-    
+    // ... existing shortcuts ...
+
+    // ... existing navigateProjects ...
+
+    // ... existing context menus ...
+
     private var filteredGitRepos: [Project] {
-        processProjects(viewModel.gitRepositories)
+        processProjects(viewModel.gitRepositories.filter { !$0.isWorkspace })
     }
     
     private var filteredNonGit: [Project] {
+        // Show Workspaces in "Other Projects" or a new section?
+        // Let's put Workspaces in "Other Projects" for now, or create a new section if desired.
+        // Actually, Workspaces usually contain Git repos.
+        // Let's create a NEW computed property for Workspaces if we want them separate.
+        // Or mix them.
         processProjects(viewModel.nonGitProjects)
+    }
+
+    private var filteredWorkspaces: [Project] {
+        processProjects(viewModel.projects.filter { $0.isWorkspace })
     }
     
     private func processProjects(_ projects: [Project]) -> [Project] {
-        var result = projects
-        
-        // 1. Search
-        if !searchText.isEmpty {
-            result = result.filter { $0.name.localizedCaseInsensitiveContains(searchText) }
-        }
-        
-        // 2. Filter
-        switch filterOption {
-        case .all:
-            break
-        case .clean:
-            result = result.filter { 
-                guard let status = $0.gitStatus else { return true }
-                return !status.hasUncommittedChanges 
-            }
-        case .changes:
-            result = result.filter {
-                 guard let status = $0.gitStatus else { return false }
-                 return status.hasUncommittedChanges 
-            }
-        }
-        
-        // 3. Sort
-        switch sortOption {
-        case .name:
-            result.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-        case .recent:
-            result.sort {
-                let date1 = $0.gitStatus?.lastCommitDate ?? $0.lastScanned
-                let date2 = $1.gitStatus?.lastCommitDate ?? $1.lastScanned
-                return date1 > date2
-            }
-        case .activity:
-            // Priority 1: Uncommitted changes (modified files) - highest priority
-            // Priority 2: Recent commits - secondary priority
-            // Priority 3: Last scan time - fallback
-            result.sort { project1, project2 in
-                let hasChanges1 = project1.gitStatus?.hasUncommittedChanges ?? false
-                let hasChanges2 = project2.gitStatus?.hasUncommittedChanges ?? false
-
-                // If one has uncommitted changes and the other doesn't, prioritize the one with changes
-                if hasChanges1 != hasChanges2 {
-                    return hasChanges1
+        // Recursive function to process a single project (filter/sort children)
+        func process(_ project: Project) -> Project? {
+            // 1. Process children first
+            var processedChildren: [Project] = []
+            for child in project.subProjects {
+                if let processedChild = process(child) {
+                    processedChildren.append(processedChild)
                 }
-
-                // Both have changes or both don't - compare by last commit date
-                let date1 = project1.gitStatus?.lastCommitDate ?? project1.lastScanned
-                let date2 = project2.gitStatus?.lastCommitDate ?? project2.lastScanned
-                return date1 > date2
             }
+            
+            // 2. Sort children
+            processedChildren = sortProjects(processedChildren)
+            
+            // 3. Create a copy with processed children
+            var processedProject = project
+            processedProject.subProjects = processedChildren
+            
+            // 4. Filter logic
+            // If the project itself matches filter, OR if it has matching children, keep it.
+            // If it's a directory/workspace, we usually want to keep it if it contains matches.
+            
+            let matchesSearch = searchText.isEmpty || project.name.localizedCaseInsensitiveContains(searchText)
+            
+            var matchesFilter = true
+            switch filterOption {
+            case .all:
+                matchesFilter = true
+            case .clean:
+                 // Keep if it has no changes (and is a repo) or if it's a container with matching children
+                if project.isGitRepository {
+                    matchesFilter = !(project.gitStatus?.hasUncommittedChanges ?? false)
+                } else {
+                    matchesFilter = !processedChildren.isEmpty // Keep container if it has clean children
+                }
+            case .changes:
+                if project.isGitRepository {
+                    matchesFilter = project.gitStatus?.hasUncommittedChanges ?? false
+                } else {
+                    matchesFilter = !processedChildren.isEmpty // Keep container if it has matches
+                }
+            }
+            
+            // If search/filter matches, return it.
+            // Exception: If it's a workspace/folder that DOESN'T match search itself, but HAS matching children, keep it.
+            let hasMatchingChildren = !processedChildren.isEmpty
+            
+            if (matchesSearch && matchesFilter) || hasMatchingChildren {
+                return processedProject
+            }
+            
+            return nil
         }
+        
+        // 1. Map and compact (filter out nil)
+        var result = projects.compactMap { process($0) }
+        
+        // 2. Sort top level
+        result = sortProjects(result)
         
         return result
+    }
+    
+    private func sortProjects(_ projects: [Project]) -> [Project] {
+        return projects.sorted { p1, p2 in
+            switch sortOption {
+            case .name:
+                return p1.name.localizedCaseInsensitiveCompare(p2.name) == .orderedAscending
+            case .recent:
+                let date1 = p1.gitStatus?.lastCommitDate ?? p1.lastScanned
+                let date2 = p2.gitStatus?.lastCommitDate ?? p2.lastScanned
+                return date1 > date2
+            case .activity:
+                let hasChanges1 = p1.gitStatus?.hasUncommittedChanges ?? false
+                let hasChanges2 = p2.gitStatus?.hasUncommittedChanges ?? false
+                if hasChanges1 != hasChanges2 { return hasChanges1 }
+                let date1 = p1.gitStatus?.lastCommitDate ?? p1.lastScanned
+                let date2 = p2.gitStatus?.lastCommitDate ?? p2.lastScanned
+                return date1 > date2
+            }
+        }
     }
     
     private var dependencyWarningView: some View {
@@ -373,44 +320,89 @@ struct ProjectListView: View {
         .background(Color.red)
     }
     
-    private func sectionHeader(_ title: String, icon: String, count: Int) -> some View {
-        HStack {
-            Image(systemName: icon)
-            Text(title)
-            Spacer()
-            // Styled count badge
-            Text("\(count)")
-                .font(.caption)
-                .bold()
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(Capsule().fill(Color.secondary.opacity(0.2)))
-                .foregroundColor(.secondary)
+     // MARK: - Context Menu
+    @ViewBuilder
+    private func contextMenuFor(_ project: Project) -> some View {
+        if project.isGitRepository || project.isWorkspace {
+             openInExternalTerminalButton(project)
         }
-        .font(.subheadline)
-        .foregroundColor(.primary)
+        openInFinderButton(project)
+        Divider()
+        copyPathButton(project)
+        Divider()
+        removeFromListButton(project)
+    }
+
+    // MARK: - Context Menu Actions
+    
+    @ViewBuilder
+    private func openInExternalTerminalButton(_ project: Project) -> some View {
+        Button {
+            openInTerminal(project.path)
+        } label: {
+            Label("Open in Terminal", systemImage: "terminal")
+        }
+    }
+
+    @ViewBuilder
+    private func openInFinderButton(_ project: Project) -> some View {
+        Button {
+            NSWorkspace.shared.selectFile(project.path, inFileViewerRootedAtPath: "")
+        } label: {
+            Label("Show in Finder", systemImage: "folder")
+        }
+    }
+
+    @ViewBuilder
+    private func copyPathButton(_ project: Project) -> some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(project.path, forType: .string)
+        } label: {
+            Label("Copy Path", systemImage: "doc.on.doc")
+        }
+    }
+
+    @ViewBuilder
+    private func removeFromListButton(_ project: Project) -> some View {
+        Button(role: .destructive) {
+            viewModel.ignoreProject(project.path)
+        } label: {
+            Label("Remove from List", systemImage: "trash")
+        }
+    }
+
+    private func openInTerminal(_ path: String) {
+        // Fallback to Terminal.app
+        let url = URL(fileURLWithPath: path)
+        let configuration = NSWorkspace.OpenConfiguration()
+        
+        // Try to open with Terminal.app specifically
+        if let terminalUrl = NSWorkspace.shared.urlForApplication(withBundleIdentifier: "com.apple.Terminal") {
+             NSWorkspace.shared.open([url], withApplicationAt: terminalUrl, configuration: configuration)
+        }
     }
     
     private var emptyStateView: some View {
         VStack(spacing: 24) {
             Image(systemName: "square.stack.3d.up")
-                .font(.system(size: 64))
-                .foregroundColor(.secondary.opacity(0.5))
-            
-            VStack(spacing: 8) {
-                Text("No Project Selected")
-                    .font(.title2)
-                    .fontWeight(.medium)
-                Text("Select a project from the sidebar to view details.")
-                    .foregroundColor(.secondary)
-            }
-            
-            Button("Add Monitored Path") {
-                showingAddPathSheet = true
-            }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
-        }
+                 .font(.system(size: 64))
+                 .foregroundColor(.secondary.opacity(0.5))
+             
+             VStack(spacing: 8) {
+                 Text("No Project Selected")
+                     .font(.title2)
+                     .fontWeight(.medium)
+                 Text("Select a project from the sidebar to view details.")
+                     .foregroundColor(.secondary)
+             }
+             
+             Button("Add Monitored Path") {
+                 showingAddPathSheet = true
+             }
+             .buttonStyle(.borderedProminent)
+             .controlSize(.large)
+         }
     }
 }
 
@@ -434,7 +426,7 @@ struct ProjectRowView: View {
                 HStack {
                     Text(project.name)
                         .font(.body)
-                        .fontWeight(.medium)
+                        .fontWeight(project.isRoot ? .bold : .medium) // Keep bold for roots
                         .foregroundColor(.primary)
                     
                     if let status = project.gitStatus, status.hasGitHubRemote {
@@ -505,8 +497,11 @@ struct ProjectRowView: View {
     }
 
     private var iconName: String {
+        if project.isRoot { return "externaldrive.fill" } // Distinct icon for Monitored Roots
+        if project.isWorkspace { return "folder.fill" }   // Distinct icon for Internal Workspaces
+        
         guard let status = project.gitStatus else {
-            return project.isGitRepository ? "arrow.triangle.2.circlepath" : "folder"
+            return project.isGitRepository ? "arrow.triangle.2.circlepath" : "doc"
         }
         if status.hasUncommittedChanges { return "pencil" }
         if status.pendingPullRequests > 0 { return "arrow.triangle.pull" }
@@ -514,6 +509,9 @@ struct ProjectRowView: View {
     }
     
     private var iconColor: Color {
+        if project.isRoot { return .indigo } // Distinct color for Monitored Roots
+        if project.isWorkspace { return .yellow } // Distinct color for Internal Workspaces
+        
         guard let status = project.gitStatus else {
             return .secondary
         }

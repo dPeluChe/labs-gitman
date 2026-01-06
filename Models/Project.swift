@@ -2,22 +2,32 @@ import Foundation
 
 /// Represents a monitored project directory
 struct Project: Identifiable, Codable, Hashable {
-    let id: UUID
+    var id: UUID
     var path: String
     var name: String
     var lastScanned: Date
     var lastReviewed: Date // When user last opened/viewed this project
     var isGitRepository: Bool
+    var isWorkspace: Bool
+    var isRoot: Bool // Is this a top-level monitored path?
+    var subProjects: [Project]
     var gitStatus: GitStatus?
 
-    init(path: String, name: String? = nil) {
+    init(path: String, name: String? = nil, isGitRepository: Bool = false, isWorkspace: Bool = false, isRoot: Bool = false, subProjects: [Project] = []) {
         self.id = UUID()
         self.path = path
         self.name = name ?? (path as NSString).lastPathComponent
         self.lastScanned = Date()
         self.lastReviewed = Date()
-        self.isGitRepository = false
+        self.isGitRepository = isGitRepository
+        self.isWorkspace = isWorkspace
+        self.isRoot = isRoot
+        self.subProjects = subProjects
         self.gitStatus = nil
+    }
+
+    var children: [Project]? {
+        subProjects.isEmpty ? nil : subProjects
     }
 
     /// Human-readable status description

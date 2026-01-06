@@ -4,88 +4,313 @@ import SwiftUI
 
 @MainActor
 class ProjectScannerViewModel: ObservableObject {
+    // MARK: - Published Properties
+    
     @Published var projects: [Project] = []
     @Published var isScanning = false
+    @Published var isLoadingFromCache = false
+    @Published var isApplyingFilter = false
     @Published var errorMessage: String?
     @Published var missingDependencies: [GitService.DependencyStatus] = []
 
+    // MARK: - Services
+    
     private let configStore = ConfigStore()
     private let gitService = GitService()
+    private let cacheManager = CacheManager()
+    private let changeDetector = ChangeDetector()
     private let logger = Logger(subsystem: "com.gitmonitor", category: "ProjectScanner")
-
-    init() {
-        loadProjects()
+    
+    // MARK: - Configuration
+    
+    /// Number of projects to process concurrently (dynamic based on CPU cores)
+    private var optimalBatchSize: Int {
+        max(5, ProcessInfo.processInfo.activeProcessorCount)
     }
+
+    // MARK: - Initialization
+    
+    init() {
+        // Load from cache immediately for instant UI
+        Task {
+            await loadFromCache()
+        }
+    }
+    
+    // MARK: - Cache Management
+    
+    /// Load projects from cache for instant display
+    func loadFromCache() async {
+        isLoadingFromCache = true
+        
+        do {
+            guard let cache = try await cacheManager.loadCache() else {
+                logger.info("No cache found, performing full scan")
+                await scanAllProjects()
+                isLoadingFromCache = false
+                return
+            }
+            
+            // Validate cache
+            let pathsMatch = await cacheManager.pathsMatch(cache, currentPaths: configStore.monitoredPaths)
+            let isValid = await cacheManager.isCacheValid(cache, maxAge: 3600)
+            
+            guard pathsMatch && isValid else {
+                logger.info("Cache invalid (paths changed or expired), performing full scan")
+                await scanAllProjects()
+                isLoadingFromCache = false
+                return
+            }
+            
+            // Use cached data
+            projects = cache.projects
+            logger.info("Loaded \(cache.projects.count) projects from cache")
+            
+            // Background: Check for changes and light refresh
+            Task {
+                await lightRefreshChangedProjects()
+                isLoadingFromCache = false
+            }
+            
+        } catch {
+            logger.error("Failed to load cache: \(error)")
+            await scanAllProjects()
+            isLoadingFromCache = false
+        }
+    }
+    
+    /// Save current projects state to cache
+    func saveCache(force: Bool = false) async {
+        let cache = ProjectCache(
+            monitoredPaths: configStore.monitoredPaths,
+            projects: projects
+        )
+        
+        do {
+            try await cacheManager.saveCache(cache, force: force)
+            logger.debug("Cache saved successfully")
+        } catch {
+            logger.error("Failed to save cache: \(error)")
+        }
+    }
+    
+    // MARK: - Project Scanning
+    
+    /// Perform a full scan of all monitored paths
+    func scanAllProjects() async {
+        isScanning = true
+        errorMessage = nil
+        logger.debug("Starting full project scan")
+
+        // 1. Discover projects (filesystem scanning)
+        let discoveredProjects = await configStore.scanMonitoredPaths()
+
+        // 2. Merge with existing projects to preserve state
+        var mergedProjects: [Project] = []
+        for newProject in discoveredProjects {
+            if let existing = projects.first(where: { $0.path == newProject.path }) {
+                var p = newProject
+                p.gitStatus = existing.gitStatus
+                p.lastScanned = existing.lastScanned
+                p.lastReviewed = existing.lastReviewed
+                
+                // Preserve sub-projects status if it's a workspace
+                if p.isWorkspace {
+                    p.subProjects = mergeSubProjects(new: p.subProjects, existing: existing.subProjects)
+                }
+                
+                mergedProjects.append(p)
+            } else {
+                mergedProjects.append(newProject)
+            }
+        }
+        
+        let sortedProjects = mergedProjects.sorted { $0.name < $1.name }
+        projects = sortedProjects
+
+        // 3. Full refresh for all git repos
+        await fullRefreshAllRepos()
+        
+        // 4. Save cache
+        await saveCache(force: true)
+
+        logger.debug("Scan completed: \(sortedProjects.count) projects")
+        isScanning = false
+    }
+    
+    /// Light refresh: Only update repos that have filesystem changes
+    func lightRefreshChangedProjects() async {
+        logger.debug("Starting light refresh of changed projects")
+        
+        // Extract all git repos from hierarchy
+        let allRepos = await getAllGitReposFlattened()
+        
+        // Detect which ones have changes
+        let changedRepos = await changeDetector.filterChangedProjects(allRepos)
+        
+        logger.info("Light refresh: \(changedRepos.count) of \(allRepos.count) repos changed")
+        
+        // Use light status refresh for changed repos
+        let batchSize = optimalBatchSize
+        for batch in changedRepos.chunked(into: batchSize) {
+            await withTaskGroup(of: Void.self) { group in
+                for project in batch {
+                    group.addTask {
+                        await self.lightRefreshProjectStatus(project)
+                    }
+                }
+            }
+        }
+        
+        // Save cache after refresh
+        await saveCache()
+    }
+    
+    /// Full refresh: Update all git repos with complete status
+    func fullRefreshAllRepos() async {
+        let allRepos = await getAllGitReposFlattened()
+        
+        logger.info("Full refresh: \(allRepos.count) repos")
+        
+        let batchSize = optimalBatchSize
+        for batch in allRepos.chunked(into: batchSize) {
+            await withTaskGroup(of: Void.self) { group in
+                for project in batch {
+                    group.addTask {
+                        await self.fullRefreshProjectStatus(project)
+                    }
+                }
+            }
+        }
+    }
+    
+    // MARK: - Status Refresh Methods
+    
+    /// Light refresh: Minimal git commands (3) with cached data reuse
+    func lightRefreshProjectStatus(_ project: Project) async {
+        do {
+            let cachedStatus = project.gitStatus
+            let gitStatus = try await gitService.getLightStatus(for: project, cachedStatus: cachedStatus)
+            
+            await updateProjectStatus(projectId: project.id, status: gitStatus)
+            
+        } catch {
+            logger.error("Light refresh failed for \(project.name): \(error)")
+        }
+    }
+    
+    /// Full refresh: All git commands (~10) for complete information
+    func fullRefreshProjectStatus(_ project: Project) async {
+        do {
+            let gitStatus = try await gitService.getStatus(for: project)
+            await updateProjectStatus(projectId: project.id, status: gitStatus)
+            
+        } catch {
+            logger.error("Full refresh failed for \(project.name): \(error)")
+        }
+    }
+    
+    /// Legacy method for backward compatibility - uses full refresh
+    func refreshProjectStatus(_ project: Project) async {
+        await fullRefreshProjectStatus(project)
+    }
+    
+    // MARK: - Project Updates
+    
+    /// Update project status in the hierarchy
+    @MainActor
+    private func updateProjectStatus(projectId: UUID, status: GitStatus) {
+        // Try top-level first
+        if let index = projects.firstIndex(where: { $0.id == projectId }) {
+            projects[index].gitStatus = status
+            projects[index].lastScanned = Date()
+            return
+        }
+        
+        // Search in hierarchy
+        for (i, rootProject) in projects.enumerated() {
+            if let newRoot = updateProjectRecursively(rootProject, targetId: projectId, status: status) {
+                projects[i] = newRoot
+                break
+            }
+        }
+    }
+    
+    /// Recursively update a project in the hierarchy
+    private func updateProjectRecursively(_ project: Project, targetId: UUID, status: GitStatus) -> Project? {
+        if project.id == targetId {
+            var p = project
+            p.gitStatus = status
+            p.lastScanned = Date()
+            return p
+        }
+        
+        guard !project.subProjects.isEmpty else {
+            return nil
+        }
+        
+        var updatedSubProjects = project.subProjects
+        var found = false
+        
+        for (index, sub) in project.subProjects.enumerated() {
+            if let updatedSub = updateProjectRecursively(sub, targetId: targetId, status: status) {
+                updatedSubProjects[index] = updatedSub
+                found = true
+                break
+            }
+        }
+        
+        if found {
+            var p = project
+            p.subProjects = updatedSubProjects
+            return p
+        }
+        
+        return nil
+    }
+    
+    /// Merge sub-projects preserving state
+    private func mergeSubProjects(new: [Project], existing: [Project]) -> [Project] {
+        new.map { newSub in
+            var sub = newSub
+            if let existingSub = existing.first(where: { $0.path == newSub.path }) {
+                sub.gitStatus = existingSub.gitStatus
+                sub.lastScanned = existingSub.lastScanned
+                sub.lastReviewed = existingSub.lastReviewed
+            }
+            return sub
+        }
+    }
+    
+    // MARK: - Helper Methods
+    
+    /// Get all git repositories as a flat array
+    private func getAllGitReposFlattened() async -> [Project] {
+        await changeDetector.extractGitRepos(from: projects.flatMap { [$0] + $0.subProjects })
+            .flatMap { project in
+                [project] + getAllGitRepos(from: project)
+            }
+    }
+    
+    /// Recursively extract git repos from a project hierarchy
+    private func getAllGitRepos(from project: Project) -> [Project] {
+        var repos: [Project] = []
+        if project.isGitRepository {
+            repos.append(project)
+        }
+        for sub in project.subProjects {
+            repos.append(contentsOf: getAllGitRepos(from: sub))
+        }
+        return repos
+    }
+    
+    // MARK: - Configuration Management
     
     func checkDependencies() async {
         let missing = await gitService.checkDependencies()
         missingDependencies = missing
         if !missing.isEmpty {
              logger.warning("Missing dependencies: \(missing)")
-        }
-    }
-
-    func scanAllProjects() async {
-        isScanning = true
-        errorMessage = nil
-        logger.info("Starting project scan")
-
-        // 1. Discover projects (identifies which are git repos)
-        let discoveredProjects = await configStore.scanMonitoredPaths()
-        
-        // IMMEDIATE UI UPDATE: Show discovered projects immediately so the list is not empty
-        // We preserve existing projects' GitStatus if they match, to avoid flickering to "Loading..." if possible
-        var mergedProjects: [Project] = []
-        for newProject in discoveredProjects {
-            if let existing = projects.first(where: { $0.path == newProject.path }) {
-                // Keep existing status while we refresh
-                var p = newProject
-                p.gitStatus = existing.gitStatus
-                mergedProjects.append(p)
-            } else {
-                mergedProjects.append(newProject)
-            }
-        }
-        self.projects = mergedProjects.sorted { $0.name < $1.name }
-        
-        // 2. Fetch details for git repos in batches to avoid system overload
-        let batchSize = 5
-        let gitProjects = self.projects.filter { $0.isGitRepository }
-        
-        for batch in gitProjects.chunked(into: batchSize) {
-            await withTaskGroup(of: Void.self) { group in
-                for project in batch {
-                    group.addTask {
-                        await self.refreshProjectStatus(project)
-                    }
-                }
-            }
-        }
-
-        logger.info("Scan completed. Total: \(self.projects.count)")
-        isScanning = false
-    }
-
-    func refreshProjectStatus(_ project: Project) async {
-        guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
-        
-        // Visual indicator logic handled by gitStatus being nil initially or updating lastScanned
-        do {
-            let gitStatus = try await gitService.getStatus(for: project)
-            
-            // UI Update on MainActor
-            if projects.indices.contains(index) {
-                projects[index].gitStatus = gitStatus
-                projects[index].lastScanned = Date()
-                projects[index].isGitRepository = true
-            }
-        } catch {
-            logger.error("Failed to refresh project \(project.name): \(error.localizedDescription)")
-            
-            // Soft failure handling: If it's a workspace root or error 0, just mark it as scanned but maybe invalid status?
-            if projects.indices.contains(index) {
-                projects[index].lastScanned = Date() 
-            }
         }
     }
 
@@ -99,24 +324,60 @@ class ProjectScannerViewModel: ObservableObject {
     
     func ignoreProject(_ path: String) {
         configStore.ignorePath(path)
-        // Refresh local list immediately
-        self.projects.removeAll { $0.path == path }
+        projects.removeAll { $0.path == path }
     }
 
     func getMonitoredPaths() -> [String] {
         configStore.monitoredPaths
     }
 
-    private func loadProjects() {
-        projects = configStore.projects
+    func markProjectAsReviewed(_ project: Project) {
+        guard let index = projects.firstIndex(where: { $0.id == project.id }) else { return }
+        projects[index].lastReviewed = Date()
     }
-
+    
+    // MARK: - Project Queries
+    
     func getProject(byPath path: String) -> Project? {
         projects.first { $0.path == path }
     }
+    
+    func getProject(byId id: UUID) -> Project? {
+        func find(in projects: [Project]) -> Project? {
+            for p in projects {
+                if p.id == id { return p }
+                if let found = find(in: p.subProjects) { return found }
+            }
+            return nil
+        }
+        return find(in: projects)
+    }
 
+    func getParent(of projectId: UUID) -> Project? {
+        func findParent(in project: Project) -> Project? {
+            if project.subProjects.contains(where: { $0.id == projectId }) {
+                return project
+            }
+            for sub in project.subProjects {
+                if let found = findParent(in: sub) { return found }
+            }
+            return nil
+        }
+        
+        for project in projects {
+            if let found = findParent(in: project) { return found }
+        }
+        return nil
+    }
+
+    // MARK: - Computed Properties
+    
     var gitRepositories: [Project] {
-        projects.filter { $0.isGitRepository }
+        var allRepos: [Project] = []
+        for project in projects {
+            allRepos.append(contentsOf: getAllGitRepos(from: project))
+        }
+        return allRepos
     }
 
     var nonGitProjects: [Project] {
@@ -124,9 +385,17 @@ class ProjectScannerViewModel: ObservableObject {
     }
 
     var projectsNeedingAttention: [Project] {
-        projects.filter { $0.gitStatus?.hasUncommittedChanges == true }
+        var attention: [Project] = []
+        for p in projects {
+            attention.append(contentsOf: getAllGitRepos(from: p).filter { 
+                $0.gitStatus?.hasUncommittedChanges == true 
+            })
+        }
+        return attention
     }
 }
+
+// MARK: - Array Extension
 
 extension Array {
     func chunked(into size: Int) -> [[Element]] {

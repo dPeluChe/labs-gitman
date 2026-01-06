@@ -5,6 +5,9 @@ struct ProjectDetailView: View {
     let onRefresh: () -> Void
     let onAppear: () -> Void
 
+    @ObservedObject var viewModel: ProjectScannerViewModel // Added for parent lookup
+    let onNavigateToProject: (String) -> Void // Added for navigation
+    
     @State private var showingLLMAnalysis = false
     @State private var showingSheet = false
     @State private var selectedTab: DetailTab = .overview
@@ -21,8 +24,10 @@ struct ProjectDetailView: View {
         var id: String { rawValue }
     }
 
-    init(project: Project, onRefresh: @escaping () -> Void, onAppear: @escaping () -> Void = {}) {
+    init(project: Project, viewModel: ProjectScannerViewModel, onNavigateToProject: @escaping (String) -> Void, onRefresh: @escaping () -> Void, onAppear: @escaping () -> Void = {}) {
         self.project = project
+        self.viewModel = viewModel
+        self.onNavigateToProject = onNavigateToProject
         self.onRefresh = onRefresh
         self.onAppear = onAppear
     }
@@ -117,7 +122,7 @@ struct ProjectDetailView: View {
                                                         Text(status.lastCommitMessage ?? "No message")
                                                             .font(.body)
                                                             .fontWeight(.medium)
-                                                            .lineLimit(3)
+                                                            .lineLimit(8)
                                                             .fixedSize(horizontal: false, vertical: true)
 
                                                         HStack(spacing: 8) {
@@ -260,6 +265,22 @@ struct ProjectDetailView: View {
     private var headerView: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 8) {
+                // Parent Workspace Navigation (Back Button style)
+                if let parent = viewModel.getParent(of: project.id) {
+                    Button(action: {
+                        onNavigateToProject(parent.id.uuidString)
+                    }) {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.turn.up.left")
+                            Text("Return to \(parent.name)")
+                        }
+                        .font(.caption)
+                        .foregroundColor(.blue)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 4)
+                }
+
                 HStack(spacing: 8) {
                     Text(project.name)
                         .font(.system(size: 28, weight: .bold))
@@ -412,8 +433,13 @@ struct ProjectDetailView: View {
             Text(title).font(.caption).foregroundColor(.secondary).fontWeight(.medium)
             ForEach(files.prefix(5), id: \.self) { file in
                 HStack {
-                    Image(systemName: icon).foregroundColor(color).font(.caption2)
-                    Text(file).font(.system(.caption, design: .monospaced)).lineLimit(1)
+                    Image(systemName: icon)
+                        .foregroundColor(color)
+                        .font(.caption2)
+                        .frame(width: 16) // Fixed width for alignment
+                    Text(file)
+                        .font(.system(.caption, design: .monospaced))
+                        .lineLimit(1)
                 }
             }
             if files.count > 5 { Text("+ \(files.count - 5) more").font(.caption2).foregroundColor(.secondary) }
@@ -506,23 +532,7 @@ struct BranchesView: View {
     @State private var searchText = ""
     @State private var commits: [GitCommit] = []
     @State private var isLoadingCommits = false
-    @State private var selectedViewMode: ViewMode = .branches
     @State private var hasLoadedCommits = false
-
-    enum ViewMode: Int {
-        case branches = 0
-        case history = 1
-    }
-
-    var body: some View {
-        VStack(spacing: 0) {
-            // Segmented picker for view mode
-            Picker("View Mode", selection: $selectedViewMode) {
-                Text("Branches").tag(ViewMode.branches)
-                Text("History").tag(ViewMode.history)
-            }
-            .pickerStyle(.segmented)
-            .padding()
 
     var body: some View {
         HStack(spacing: 0) {
@@ -591,7 +601,7 @@ struct BranchesView: View {
                 ScrollView {
                     // Use a VStack for better structure
                     VStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(commits.enumerated()), id: \.hash) { index, commit in
+                        ForEach(Array(commits.enumerated()), id: \.element.hash) { index, commit in
                             HStack(alignment: .top, spacing: 16) {
                                 // Timeline Line & Dot Column
                                 VStack(spacing: 0) {
@@ -692,8 +702,6 @@ struct BranchesView: View {
             }
         }
     }
-
-
 
     private var loadingView: some View {
         VStack(spacing: 12) {
