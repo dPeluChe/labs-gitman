@@ -3,10 +3,15 @@ import SwiftUI
 struct ProjectDetailView: View {
     let project: Project
     let onRefresh: () -> Void
+    let onAppear: () -> Void
 
     @State private var showingLLMAnalysis = false
     @State private var showingSheet = false
-    @State private var selectedTab: DetailTab
+    @State private var selectedTab: DetailTab = .overview
+    @State private var isRefreshing = false
+    @State private var showingCommitDetails = false
+    @State private var showingUncommittedChanges = false
+    @Namespace private var tabAnimation
 
     enum DetailTab: String, CaseIterable, Identifiable {
         case overview = "Overview"
@@ -15,11 +20,11 @@ struct ProjectDetailView: View {
         case branches = "Branches & History"
         var id: String { rawValue }
     }
-    
-    init(project: Project, initialTab: DetailTab? = nil, onRefresh: @escaping () -> Void) {
+
+    init(project: Project, onRefresh: @escaping () -> Void, onAppear: @escaping () -> Void = {}) {
         self.project = project
         self.onRefresh = onRefresh
-        _selectedTab = State(initialValue: initialTab ?? .overview)
+        self.onAppear = onAppear
     }
 
     var body: some View {
@@ -29,33 +34,39 @@ struct ProjectDetailView: View {
                 .padding()
                 .background(Color(.windowBackgroundColor))
 
-            // Tab Picker
-            Picker("", selection: $selectedTab) {
-                ForEach(DetailTab.allCases) { tab in
-                    Text(tab.rawValue).tag(tab)
-                }
-            }
-            .pickerStyle(.segmented)
-            .padding(.horizontal)
-            .padding(.bottom, 8)
-            .background(Color(.windowBackgroundColor))
-
-            // Tab Content
-            switch selectedTab {
-            case .overview:
+            // Standard TabView for reliable switching
+            TabView(selection: $selectedTab) {
                 OverviewContent()
-            case .files:
+                    .tabItem { Text("Overview") }
+                    .tag(DetailTab.overview)
+                
                 FileExplorerView(projectPath: project.path)
-            case .terminal:
+                    .tabItem { Text("Files") }
+                    .tag(DetailTab.files)
+                
                 TerminalView(projectPath: project.path)
-            case .branches:
+                    .tabItem { Text("Terminal") }
+                    .tag(DetailTab.terminal)
+                
                 BranchesView(project: project)
+                    .tabItem { Text("Branches") }
+                    .tag(DetailTab.branches)
             }
+            .padding(.top, 0)
+        }
+        .onAppear {
+            onAppear()
         }
         .background(Color(.windowBackgroundColor))
         .navigationTitle(project.name)
         .sheet(isPresented: $showingSheet) {
             LLMAnalysisSheet(project: project)
+        }
+        .sheet(isPresented: $showingCommitDetails) {
+            CommitHistorySheet(project: project)
+        }
+        .sheet(isPresented: $showingUncommittedChanges) {
+            UncommittedChangesSheet(project: project)
         }
     }
     
@@ -66,31 +77,158 @@ struct ProjectDetailView: View {
             VStack(alignment: .leading, spacing: 20) {
                 if project.isGitRepository {
                     if let status = project.gitStatus {
-                        // Git Statistics Grid
-                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
-                            statCard(title: "Active Branch", value: status.currentBranch, icon: "arrow.triangle.branch", color: .blue)
-                            statCard(title: "Status", value: status.healthStatus == .clean ? "Clean" : "Changes", icon: status.healthStatus == .clean ? "checkmark.circle.fill" : "exclamationmark.triangle.fill", color: status.healthStatus == .clean ? .green : .orange)
-                        }
+                        // Two column layout
+                        HStack(alignment: .top, spacing: 20) {
+                            // LEFT COLUMN: Commit & Changes related (60%)
+                            VStack(alignment: .leading, spacing: 16) {
+                                // Uncommitted Changes Section (if any)
+                                if status.hasUncommittedChanges {
+                                    Button(action: {
+                                        showingUncommittedChanges = true
+                                    }) {
+                                        changesSectionContent(status: status)
+                                    }
+                                    .buttonStyle(.plain)
+                                }
 
-                        // Detailed Status Sections
-                        if status.hasUncommittedChanges {
-                            changesSection(status: status)
-                        }
+                                // Latest Commit Section (clickable for details)
+                                if let hash = status.lastCommitHash {
+                                    Button(action: {
+                                        showingCommitDetails = true
+                                    }) {
+                                        VStack(alignment: .leading, spacing: 12) {
+                                            HStack {
+                                                Text("Latest Commit")
+                                                    .font(.headline)
+                                                    .foregroundColor(.secondary)
+                                                Spacer()
+                                                Image(systemName: "chevron.right")
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
 
-                        if status.pendingPullRequests > 0 {
-                            prSection(count: status.pendingPullRequests)
-                        }
-                        
-                        if let hash = status.lastCommitHash {
-                            commitSection(hash: hash, message: status.lastCommitMessage, date: status.lastCommitDate)
-                        }
-                        
-                        if !status.branches.isEmpty {
-                            branchesPreviewSection(status.branches)
-                        }
-                        
-                        if status.hasGitHubRemote {
-                            githubSection
+                                            VStack(alignment: .leading, spacing: 8) {
+                                                HStack(alignment: .top, spacing: 8) {
+                                                    Image(systemName: "signpost.right.and.left")
+                                                        .foregroundColor(.secondary)
+                                                        .font(.title2)
+
+                                                    VStack(alignment: .leading, spacing: 6) {
+                                                        Text(status.lastCommitMessage ?? "No message")
+                                                            .font(.body)
+                                                            .fontWeight(.medium)
+                                                            .lineLimit(3)
+                                                            .fixedSize(horizontal: false, vertical: true)
+
+                                                        HStack(spacing: 8) {
+                                                            Text(hash.prefix(8))
+                                                                .font(.system(.caption, design: .monospaced))
+                                                                .padding(.horizontal, 6)
+                                                                .padding(.vertical, 2)
+                                                                .background(Color.secondary.opacity(0.1))
+                                                                .cornerRadius(4)
+
+                                                            if let commitDate = status.lastCommitDate {
+                                                                Text(relativeTime(commitDate))
+                                                                    .font(.caption)
+                                                                    .foregroundColor(.secondary)
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                        .padding()
+                                        .frame(maxWidth: .infinity, alignment: .leading)
+                                        .background(Color(.controlBackgroundColor))
+                                        .cornerRadius(12)
+                                    }
+                                    .buttonStyle(.plain)
+                                    .help("Click to view commit details")
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+
+                            // RIGHT COLUMN: Info & Actions (40%)
+                            VStack(alignment: .leading, spacing: 16) {
+                                // Branches Info
+                                VStack(alignment: .leading, spacing: 12) {
+                                    Text("Branches")
+                                        .font(.headline)
+                                        .foregroundColor(.secondary)
+
+                                    VStack(spacing: 8) {
+                                        // Current branch
+                                        HStack {
+                                            Image(systemName: "record.circle.fill")
+                                                .foregroundColor(.green)
+                                                .font(.caption2)
+                                            Text(status.currentBranch)
+                                                .font(.subheadline)
+                                                .fontWeight(.semibold)
+                                            Spacer()
+                                        }
+                                        .padding(.horizontal, 10)
+                                        .padding(.vertical, 6)
+                                        .background(Color.green.opacity(0.1))
+                                        .cornerRadius(6)
+
+                                        // Other branches count
+                                        let otherBranchesCount = status.branches.filter { !$0.isCurrent }.count
+                                        if otherBranchesCount > 0 {
+                                            HStack {
+                                                Image(systemName: "circle")
+                                                    .foregroundColor(.secondary)
+                                                    .font(.caption2)
+                                                Text("\(otherBranchesCount) other branch\(otherBranchesCount > 1 ? "es" : "")")
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                                Spacer()
+                                                Image(systemName: "chevron.right")
+                                                    .font(.caption2)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                            .contentShape(Rectangle())
+                                            .onTapGesture {
+                                                selectedTab = .branches
+                                            }
+                                        }
+                                    }
+                                }
+                                .padding()
+                                .background(Color(.controlBackgroundColor))
+                                .cornerRadius(12)
+
+                                // AI Analysis Button
+                                Button(action: {
+                                    showingSheet = true
+                                }) {
+                                    HStack(spacing: 8) {
+                                        Image(systemName: "brain.head.profile")
+                                            .font(.title3)
+                                            .foregroundColor(.purple)
+                                        VStack(alignment: .leading, spacing: 2) {
+                                            Text("Analyze with AI")
+                                                .font(.subheadline)
+                                                .fontWeight(.medium)
+                                            Text("Get insights & recommendations")
+                                                .font(.caption2)
+                                                .foregroundColor(.secondary)
+                                        }
+                                        Spacer()
+                                        Image(systemName: "chevron.right")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    .padding()
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .background(Color.purple.opacity(0.1))
+                                    .cornerRadius(12)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Analyze repository with AI")
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
                         }
 
                     } else {
@@ -100,12 +238,10 @@ struct ProjectDetailView: View {
                 } else {
                     nonGitView
                 }
-
-                // Action Buttons
-                actionsView
             }
             .padding(20)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
     
     private var loadingView: some View {
@@ -123,9 +259,65 @@ struct ProjectDetailView: View {
 
     private var headerView: some View {
         HStack(alignment: .top) {
-            VStack(alignment: .leading, spacing: 6) {
-                Text(project.name)
-                    .font(.system(size: 28, weight: .bold))
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(project.name)
+                        .font(.system(size: 28, weight: .bold))
+
+                    // Branch badge
+                    if let status = project.gitStatus {
+                        HStack(spacing: 4) {
+                            Image(systemName: "arrow.triangle.branch")
+                                .font(.caption2)
+                            Text(status.currentBranch)
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(status.hasUncommittedChanges ? Color.yellow.opacity(0.2) : Color.green.opacity(0.15))
+                        .foregroundColor(status.hasUncommittedChanges ? .orange : .green)
+                        .cornerRadius(6)
+                    }
+
+                    // GitHub/Open Repository button (separate from branch badge)
+                    if let repoURL = extractRepositoryURL(from: project.path) {
+                        Button(action: {
+                            NSWorkspace.shared.open(repoURL)
+                        }) {
+                            HStack(spacing: 4) {
+                                Image(systemName: "link")
+                                    .font(.caption)
+                                Text("Open in \(repoURL.host?.contains("github") == true ? "GitHub" : repoURL.host ?? "Repository")")
+                                    .font(.caption)
+                                    .fontWeight(.medium)
+                            }
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 4)
+                            .background(Color.secondary.opacity(0.1))
+                            .foregroundColor(.secondary)
+                            .cornerRadius(6)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Open repository in browser")
+                    }
+
+                    // Uncommitted changes badge
+                    if let status = project.gitStatus, status.hasUncommittedChanges {
+                        HStack(spacing: 4) {
+                            Image(systemName: "pencil.circle")
+                                .font(.caption2)
+                            Text("Uncommitted")
+                                .font(.caption)
+                                .fontWeight(.medium)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 4)
+                        .background(Color.orange.opacity(0.15))
+                        .foregroundColor(.orange)
+                        .cornerRadius(6)
+                    }
+                }
 
                 Button(action: {
                     NSWorkspace.shared.open(URL(fileURLWithPath: project.path))
@@ -138,6 +330,28 @@ struct ProjectDetailView: View {
                             .foregroundColor(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
+
+                        Divider()
+                            .frame(height: 12)
+
+                        HStack(spacing: 4) {
+                            Image(systemName: "clock")
+                                .font(.caption2)
+                            Text("Updated: \(relativeTimeShort(project.gitStatus?.lastCommitDate ?? project.lastScanned))")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
+
+                        Divider()
+                            .frame(height: 12)
+
+                        HStack(spacing: 4) {
+                            Image(systemName: "eye")
+                                .font(.caption2)
+                            Text("Reviewed: \(relativeTimeShort(project.lastReviewed))")
+                                .font(.caption2)
+                                .foregroundColor(.secondary)
+                        }
                     }
                     .contentShape(Rectangle())
                 }
@@ -147,67 +361,52 @@ struct ProjectDetailView: View {
 
             Spacer()
 
-            Button(action: onRefresh) {
-                Image(systemName: "arrow.clockwise")
-                    .font(.system(size: 16, weight: .semibold))
-                    .frame(width: 32, height: 32)
-                    .background(Circle().fill(Color.secondary.opacity(0.1)))
+            Button(action: {
+                isRefreshing = true
+                onRefresh()
+                // Reset refresh state after a delay
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                    isRefreshing = false
+                }
+            }) {
+                ZStack {
+                    if isRefreshing {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Image(systemName: "arrow.clockwise")
+                            .font(.system(size: 16, weight: .semibold))
+                    }
+                }
+                .frame(width: 32, height: 32)
+                .background(Circle().fill(Color.secondary.opacity(0.1)))
             }
             .buttonStyle(.plain)
             .help("Refresh project (⌘R)")
+            .disabled(isRefreshing)
         }
-    }
-    
-    private var githubSection: some View {
-        HStack {
-            Image(systemName: "cloud.fill")
-            Text("Connected to GitHub")
-                .fontWeight(.medium)
-            Spacer()
-            Link("View on GitHub", destination: URL(string: "https://github.com")!)
-                .font(.caption)
-                .buttonStyle(.bordered)
-        }
-        .padding()
-        .background(Color(.controlBackgroundColor))
-        .cornerRadius(12)
-        .overlay(RoundedRectangle(cornerRadius: 12).stroke(Color.secondary.opacity(0.1), lineWidth: 1))
     }
 
-    private func statCard(title: String, value: String, icon: String, color: Color) -> some View {
+    private func changesSectionContent(status: GitStatus) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: icon)
-                    .foregroundColor(color)
-                    .font(.title3)
-                Spacer()
-            }
-            VStack(alignment: .leading, spacing: 2) {
-                Text(value).font(.headline).lineLimit(1)
-                Text(title).font(.caption).foregroundColor(.secondary)
-            }
-        }
-        .padding()
-        .background(Color(.controlBackgroundColor))
-        .cornerRadius(12)
-        .shadow(color: Color.black.opacity(0.05), radius: 2, x: 0, y: 1)
-    }
+            // Calculate total files
+            let totalFiles = status.modifiedFiles.count + status.stagedFiles.count + status.untrackedFiles.count
 
-    private func changesSection(status: GitStatus) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Label("Uncommitted Changes", systemImage: "pencil.circle.fill")
+            Label("WIP - \(totalFiles) file\(totalFiles == 1 ? "" : "s") modified", systemImage: "pencil.circle.fill")
                 .font(.headline)
+
             VStack(spacing: 8) {
                 if !status.modifiedFiles.isEmpty { fileList(title: "Modified", files: status.modifiedFiles, icon: "pencil", color: .orange) }
                 if !status.stagedFiles.isEmpty { fileList(title: "Staged", files: status.stagedFiles, icon: "plus.circle", color: .green) }
                 if !status.untrackedFiles.isEmpty { fileList(title: "Untracked", files: status.untrackedFiles, icon: "questionmark.square", color: .gray) }
             }
             .padding()
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color(.controlBackgroundColor))
             .cornerRadius(12)
         }
     }
-    
+
     private func fileList(title: String, files: [String], icon: String, color: Color) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.caption).foregroundColor(.secondary).fontWeight(.medium)
@@ -222,85 +421,70 @@ struct ProjectDetailView: View {
         .padding(.bottom, 4)
     }
 
-    private func prSection(count: Int) -> some View {
-        HStack {
-            VStack(alignment: .leading) {
-                Text("Pull Requests").font(.headline)
-                Text("\(count) pending review").font(.caption).foregroundColor(.secondary)
-            }
-            Spacer()
-            Button("View") {}.buttonStyle(.borderedProminent).controlSize(.small)
-        }
-        .padding()
-        .background(Color.blue.opacity(0.1))
-        .cornerRadius(12)
-    }
-    
-    private func branchesPreviewSection(_ branches: [GitBranch]) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Recent Branches")
-                    .font(.headline)
-                Spacer()
-                Button { selectedTab = .branches } label: {
-                    Text("See All (\(branches.count))")
-                        .font(.caption)
-                }
-            }
-            
-            ForEach(branches.prefix(3), id: \.name) { branch in
-                HStack {
-                    Image(systemName: branch.isCurrent ? "record.circle.fill" : "circle")
-                        .foregroundColor(branch.isCurrent ? .green : .secondary)
-                        .font(.caption2)
-                    
-                    Text(branch.name)
-                        .font(.subheadline)
-                        .fontWeight(branch.isCurrent ? .semibold : .regular)
-                    
-                    Spacer()
-                    
-                    if let date = branch.lastCommitDate {
-                        Text(relativeTime(date))
-                            .font(.caption2)
-                            .foregroundColor(.secondary)
-                    }
-                }
-                .padding(8)
-                .background(Color(.controlBackgroundColor))
-                .cornerRadius(8)
-            }
-        }
-        .padding()
-        .background(Color(.controlBackgroundColor).opacity(0.5))
-        .cornerRadius(12)
-    }
-    
-    private func commitSection(hash: String, message: String?, date: Date?) -> some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Latest Commit").font(.headline)
-            HStack(alignment: .top) {
-                Image(systemName: "signpost.right.and.left").foregroundColor(.secondary)
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(message ?? "No message").font(.subheadline).fixedSize(horizontal: false, vertical: true)
-                    HStack {
-                        Text(hash.prefix(8)).font(.system(.caption, design: .monospaced)).padding(.horizontal, 6).padding(.vertical, 2).background(Color.secondary.opacity(0.1)).cornerRadius(4)
-                        if let date = date {
-                            Text(relativeTime(date)).font(.caption2).foregroundColor(.secondary)
-                        }
-                    }
-                }
-            }
-        }
-        .padding()
-        .background(Color(.controlBackgroundColor))
-        .cornerRadius(12)
-    }
-    
     private func relativeTime(_ date: Date) -> String {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
         return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private func relativeTimeShort(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .abbreviated
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+
+    private func extractRepositoryURL(from path: String) -> URL? {
+        // Try to get remote URL from git config
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        task.arguments = ["config", "--get", "remote.origin.url"]
+        task.currentDirectoryURL = URL(fileURLWithPath: path)
+
+        let pipe = Pipe()
+        task.standardOutput = pipe
+
+        do {
+            try task.run()
+            task.waitUntilExit()
+
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            let output = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+
+            // Convert git@github.com:user/repo.git to https://github.com/user/repo
+            if output.contains("github.com") {
+                let url = output
+                    .replacingOccurrences(of: "git@github.com:", with: "https://github.com/")
+                    .replacingOccurrences(of: "https://github.com:", with: "https://github.com/")
+                    .replacingOccurrences(of: ".git", with: "")
+                return URL(string: url)
+            }
+
+            // Convert git@gitlab.com:user/repo.git to https://gitlab.com/user/repo
+            if output.contains("gitlab.com") {
+                let url = output
+                    .replacingOccurrences(of: "git@gitlab.com:", with: "https://gitlab.com/")
+                    .replacingOccurrences(of: "https://gitlab.com:", with: "https://gitlab.com/")
+                    .replacingOccurrences(of: ".git", with: "")
+                return URL(string: url)
+            }
+
+            // Convert git@bitbucket.org:user/repo.git to https://bitbucket.org/user/repo
+            if output.contains("bitbucket.org") {
+                let url = output
+                    .replacingOccurrences(of: "git@bitbucket.org:", with: "https://bitbucket.org/")
+                    .replacingOccurrences(of: "https://bitbucket.org:", with: "https://bitbucket.org/")
+                    .replacingOccurrences(of: ".git", with: "")
+                return URL(string: url)
+            }
+
+            // Generic HTTPS URL
+            if output.hasPrefix("https://") || output.hasPrefix("http://") {
+                let url = output.replacingOccurrences(of: ".git", with: "")
+                return URL(string: url)
+            }
+        } catch {}
+
+        return nil
     }
 
     private var nonGitView: some View {
@@ -314,51 +498,6 @@ struct ProjectDetailView: View {
         .background(Color(.controlBackgroundColor))
         .cornerRadius(16)
     }
-
-    private var actionsView: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Quick Actions").font(.headline)
-            HStack(spacing: 12) {
-                if project.isGitRepository {
-                    actionButton(title: "Analyze AI", icon: "brain.head.profile", color: .purple) { showingSheet = true }
-                }
-                actionButton(title: "Finder", icon: "folder", color: .blue) { NSWorkspace.shared.open(URL(fileURLWithPath: project.path)) }
-                if project.isGitRepository {
-                    actionButton(title: "Terminal", icon: "terminal", color: .gray) { openInTerminal() }
-                }
-            }
-        }
-    }
-    
-    private func actionButton(title: String, icon: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 8) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(color.opacity(0.15))
-                        .frame(width: 48, height: 48)
-
-                    Image(systemName: icon)
-                        .font(.system(size: 20))
-                        .foregroundColor(color)
-                }
-
-                Text(title)
-                    .font(.caption)
-                    .fontWeight(.medium)
-                    .foregroundColor(.primary)
-            }
-            .frame(maxWidth: .infinity)
-        }
-        .buttonStyle(.plain)
-        .help(title)
-    }
-
-    private func openInTerminal() {
-        // This opens the INTERNAL terminal since we are in the detail view
-        // Switching tab to terminal
-        selectedTab = .terminal
-    }
 }
 
 // Separate Branch View Component with integrated History
@@ -368,6 +507,7 @@ struct BranchesView: View {
     @State private var commits: [GitCommit] = []
     @State private var isLoadingCommits = false
     @State private var selectedViewMode: ViewMode = .branches
+    @State private var hasLoadedCommits = false
 
     enum ViewMode: Int {
         case branches = 0
@@ -384,17 +524,41 @@ struct BranchesView: View {
             .pickerStyle(.segmented)
             .padding()
 
-            Divider()
-
-            // Branch List or History Timeline
-            if selectedViewMode == .branches {
+    var body: some View {
+        HStack(spacing: 0) {
+            // Left Column: Branches Box
+            VStack(alignment: .leading, spacing: 0) {
+                Text("Branches")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                    .padding()
+                
+                Divider()
+                
                 branchesList
-            } else {
+            }
+            .frame(width: 250)
+            .background(Color(.controlBackgroundColor))
+            
+            Divider()
+            
+            // Right Column: History Timeline (Main)
+            VStack(alignment: .leading, spacing: 0) {
+                Text("History")
+                    .font(.headline)
+                    .foregroundColor(.secondary)
+                    .padding() // Match branches header
+                
+                Divider()
+                
                 commitTimeline
             }
         }
         .task {
-            await loadCommitHistory()
+            if !hasLoadedCommits {
+                await loadCommitHistory()
+                hasLoadedCommits = true
+            }
         }
     }
 
@@ -409,12 +573,9 @@ struct BranchesView: View {
                 } else {
                     Text("No branch info available")
                         .foregroundColor(.secondary)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .padding()
                 }
             }
-        }
-        .task {
-            await loadCommitHistory()
         }
     }
 
@@ -428,15 +589,74 @@ struct BranchesView: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 0) {
-                        ForEach(Array(commits.enumerated()), id: \.element) { index, commit in
-                            commitRow(commit, index: index)
-                            if index < commits.count - 1 {
-                                connectorLine
+                    // Use a VStack for better structure
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(Array(commits.enumerated()), id: \.hash) { index, commit in
+                            HStack(alignment: .top, spacing: 16) {
+                                // Timeline Line & Dot Column
+                                VStack(spacing: 0) {
+                                    // Top Line Segment
+                                    Rectangle()
+                                        .fill(index == 0 ? Color.clear : Color.secondary.opacity(0.3))
+                                        .frame(width: 2, height: 16)
+                                    
+                                    // Dot
+                                    ZStack {
+                                        Circle()
+                                            .fill(index == 0 ? Color.accentColor : Color.secondary.opacity(0.5))
+                                            .frame(width: 10, height: 10)
+                                        if index == 0 {
+                                            Circle()
+                                                .stroke(Color(.windowBackgroundColor), lineWidth: 2)
+                                                .frame(width: 10, height: 10)
+                                        }
+                                    }
+                                    
+                                    // Bottom Line Segment
+                                    Rectangle()
+                                        .fill(index == commits.count - 1 ? Color.clear : Color.secondary.opacity(0.3))
+                                        .frame(width: 2) // Extends to bottom of row
+                                }
+                                .frame(width: 16) // Fixed width for alignment column
+
+                                // Commit Data Column
+                                VStack(alignment: .leading, spacing: 6) {
+                                    HStack {
+                                        Text(commit.message)
+                                            .font(.body)
+                                            .fontWeight(.medium)
+                                            .lineLimit(1)
+                                            .truncationMode(.tail)
+                                        
+                                        Spacer()
+                                        
+                                        Text(relativeTime(commit.date))
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                    }
+                                    
+                                    HStack(spacing: 8) {
+                                        Text(commit.hash.prefix(7))
+                                            .font(.system(.caption, design: .monospaced))
+                                            .padding(.horizontal, 4)
+                                            .padding(.vertical, 2)
+                                            .background(Color.secondary.opacity(0.1))
+                                            .cornerRadius(4)
+                                        
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "person.circle")
+                                            Text(commit.author)
+                                        }
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                    }
+                                }
+                                .padding(.bottom, 24) // Add spacing for next row
                             }
+                            .padding(.horizontal)
                         }
-                        .padding(.vertical, 8)
                     }
+                    .padding(.vertical)
                 }
             }
         }
@@ -444,41 +664,26 @@ struct BranchesView: View {
 
     private func branchRow(_ branch: GitBranch) -> some View {
         HStack {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack {
-                    if branch.isCurrent {
-                        Image(systemName: "checkmark.circle.fill")
-                            .foregroundColor(.green)
-                            .font(.caption)
-                    }
-                    Text(branch.name)
-                        .font(.headline)
-                        .fontWeight(branch.isCurrent ? .bold : .medium)
-                }
-
-                if let hash = branch.lastCommitHash {
-                    HStack(spacing: 4) {
-                        Image(systemName: "clock")
-                            .font(.system(size: 10))
-                        Text(hash.prefix(7))
-                            .font(.caption)
-                            .monospaced()
-                            .foregroundColor(.secondary)
-                    }
-                }
+            if branch.isCurrent {
+                Image(systemName: "checkmark")
+                    .foregroundColor(.green)
+                    .font(.caption.bold())
+                    .frame(width: 16)
+            } else {
+                Spacer().frame(width: 16)
             }
-
+            
+            Text(branch.name)
+                .font(.body)
+                .fontWeight(branch.isCurrent ? .semibold : .regular)
+                .lineLimit(1)
+                
             Spacer()
-
-            if let date = branch.lastCommitDate {
-                Text(relativeTime(date))
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-            }
         }
-        .padding(.horizontal)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
         .contentShape(Rectangle())
+        .background(branch.isCurrent ? Color.green.opacity(0.05) : Color.clear)
         .contextMenu {
             Button("Switch to Branch") {
                 Task {
@@ -488,70 +693,7 @@ struct BranchesView: View {
         }
     }
 
-    private func commitRow(_ commit: GitCommit, index: Int) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            // Timeline dot
-            ZStack {
-                Circle()
-                    .fill(index == 0 ? Color.accentColor : Color.secondary.opacity(0.3))
-                    .frame(width: 12, height: 12)
 
-                if index == 0 {
-                    Circle()
-                        .stroke(Color.white, lineWidth: 2)
-                        .frame(width: 12, height: 12)
-                }
-            }
-            .frame(width: 12, height: 12)
-
-            // Commit content
-            VStack(alignment: .leading, spacing: 6) {
-                // Hash and author
-                HStack {
-                    Text(commit.hash)
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundColor(.accentColor)
-                        .fontWeight(.medium)
-
-                    Spacer()
-
-                    Text(relativeTime(commit.date))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-
-                // Message
-                Text(commit.message)
-                    .font(.body)
-                    .foregroundColor(.primary)
-                    .lineLimit(2)
-
-                // Author
-                HStack(spacing: 4) {
-                    Image(systemName: "person.circle.fill")
-                        .font(.system(size: 12))
-                    Text(commit.author)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                }
-            }
-            .padding(.vertical, 4)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal)
-    }
-
-    private var connectorLine: some View {
-        HStack(spacing: 0) {
-            Rectangle()
-                .fill(Color.secondary.opacity(0.3))
-                .frame(width: 2)
-            Spacer()
-        }
-        .frame(height: 20)
-        .padding(.leading, 5)
-    }
 
     private var loadingView: some View {
         VStack(spacing: 12) {
@@ -600,4 +742,250 @@ struct BranchesView: View {
             print("Failed to switch branch: \(error.localizedDescription)")
         }
     }
+}
+
+// Commit History Sheet Component
+struct CommitHistorySheet: View {
+    let project: Project
+    @Environment(\.dismiss) private var dismiss
+    @State private var commits: [GitCommit] = []
+    @State private var isLoading = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if let status = project.gitStatus, let hash = status.lastCommitHash {
+                    // Latest Commit
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text("Latest Commit")
+                            .font(.title2)
+                            .fontWeight(.bold)
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            // Hash with copy button
+                            HStack {
+                                Image(systemName: "signpost.right.and.left")
+                                    .foregroundColor(.secondary)
+                                Text(hash)
+                                    .font(.system(.body, design: .monospaced))
+                                    .foregroundColor(.secondary)
+                                Spacer()
+                                Button(action: {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(hash, forType: .string)
+                                }) {
+                                    Image(systemName: "doc.on.doc")
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Copy commit hash")
+                            }
+
+                            // Message
+                            Text(status.lastCommitMessage ?? "No message provided")
+                                .font(.body)
+                                .fontWeight(.medium)
+
+                            // Date
+                            if let date = status.lastCommitDate {
+                                HStack(spacing: 12) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "clock")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        Text("Committed")
+                                            .font(.caption)
+                                            .foregroundColor(.secondary)
+                                        Text(relativeTime(date))
+                                            .font(.caption)
+                                    }
+
+                                    Spacer()
+
+                                    Text(DateFormatter.fullDate.string(from: date))
+                                        .font(.caption)
+                                        .foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                        .padding()
+                        .background(Color(.controlBackgroundColor))
+                        .cornerRadius(12)
+                    }
+
+                    Divider()
+
+                    // Load More Commits Button
+                    Button(action: {
+                        loadMoreCommits()
+                    }) {
+                        HStack {
+                            if isLoading {
+                                ProgressView().controlSize(.small)
+                            } else {
+                                Text("Load previous 3 commits")
+                                    .font(.subheadline)
+                                Image(systemName: "chevron.down")
+                            }
+                        }
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(isLoading)
+
+                    // Previous Commits List
+                    if !commits.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text("Previous Commits")
+                                .font(.headline)
+
+                            VStack(alignment: .leading, spacing: 8) {
+                                ForEach(commits) { commit in
+                                    HStack(alignment: .top, spacing: 12) {
+                                        VStack(alignment: .leading, spacing: 4) {
+                                            Text(commit.message)
+                                                .font(.subheadline)
+                                                .fontWeight(.medium)
+                                            HStack(spacing: 8) {
+                                                Text(commit.hash.prefix(8))
+                                                    .font(.system(.caption, design: .monospaced))
+                                                    .foregroundColor(.secondary)
+                                                Text(relativeTime(commit.date))
+                                                    .font(.caption)
+                                                    .foregroundColor(.secondary)
+                                            }
+                                        }
+                                        Spacer()
+                                    }
+                                    .padding()
+                                    .background(Color.secondary.opacity(0.05))
+                                    .cornerRadius(8)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(24)
+        }
+        .frame(minWidth: 600, minHeight: 400)
+        .navigationTitle("Commit History")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close") {
+                    dismiss()
+                }
+            }
+        }
+    }
+
+    private func loadMoreCommits() {
+        isLoading = true
+        let gitService = GitService()
+        Task {
+            do {
+                let currentCount = commits.count
+                let newCommits = try await gitService.getCommitHistory(path: project.path, limit: currentCount + 3)
+                commits = Array(newCommits.dropFirst()) // Skip first one (already shown)
+            } catch {
+                print("Error loading commits: \(error)")
+            }
+            isLoading = false
+        }
+    }
+
+    private func relativeTime(_ date: Date) -> String {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .full
+        return formatter.localizedString(for: date, relativeTo: Date())
+    }
+}
+
+// Uncommitted Changes Sheet Component
+struct UncommittedChangesSheet: View {
+    let project: Project
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                if let status = project.gitStatus {
+                    Text("Uncommitted Changes")
+                        .font(.title2)
+                        .fontWeight(.bold)
+
+                    VStack(alignment: .leading, spacing: 16) {
+                        if !status.modifiedFiles.isEmpty {
+                            fileChangeList(title: "Modified", files: status.modifiedFiles, icon: "pencil", color: .orange, count: status.modifiedFiles.count)
+                        }
+
+                        if !status.stagedFiles.isEmpty {
+                            fileChangeList(title: "Staged", files: status.stagedFiles, icon: "plus.circle", color: .green, count: status.stagedFiles.count)
+                        }
+
+                        if !status.untrackedFiles.isEmpty {
+                            fileChangeList(title: "Untracked", files: status.untrackedFiles, icon: "questionmark.square", color: .gray, count: status.untrackedFiles.count)
+                        }
+
+                        if !status.modifiedFiles.isEmpty || !status.stagedFiles.isEmpty || !status.untrackedFiles.isEmpty {
+                            Divider()
+                            Text("Total: \(status.modifiedFiles.count + status.stagedFiles.count + status.untrackedFiles.count) files")
+                                .font(.caption)
+                                .foregroundColor(.secondary)
+                        }
+                    }
+                }
+            }
+            .padding(24)
+        }
+        .frame(minWidth: 600, minHeight: 400)
+        .navigationTitle("Uncommitted Changes")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) {
+                Button("Close") {
+                    dismiss()
+                }
+            }
+        }
+    }
+
+    private func fileChangeList(title: String, files: [String], icon: String, color: Color, count: Int) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text(title)
+                    .font(.headline)
+                Text("(\(count))")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                ForEach(files, id: \.self) { file in
+                    HStack {
+                        Image(systemName: icon)
+                            .foregroundColor(color)
+                            .font(.caption)
+                            .frame(width: 20)
+                        Text(file)
+                            .font(.system(.body, design: .monospaced))
+                            .lineLimit(1)
+                        Spacer()
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 8)
+                    .background(Color.secondary.opacity(0.05))
+                    .cornerRadius(6)
+                }
+            }
+        }
+    }
+}
+
+extension DateFormatter {
+    static let fullDate: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
 }
