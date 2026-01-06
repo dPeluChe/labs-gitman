@@ -6,6 +6,7 @@ struct Project: Identifiable, Codable, Hashable {
     var path: String
     var name: String
     var lastScanned: Date
+    var lastReviewed: Date // When user last opened/viewed this project
     var isGitRepository: Bool
     var gitStatus: GitStatus?
 
@@ -14,6 +15,7 @@ struct Project: Identifiable, Codable, Hashable {
         self.path = path
         self.name = name ?? (path as NSString).lastPathComponent
         self.lastScanned = Date()
+        self.lastReviewed = Date()
         self.isGitRepository = false
         self.gitStatus = nil
     }
@@ -63,6 +65,8 @@ struct GitStatus: Codable, Hashable {
     var lastCommitMessage: String?
     var lastCommitDate: Date? // Used for sorting
     var hasGitHubRemote: Bool
+    var incomingCommits: Int
+    var outgoingCommits: Int
     var branches: [GitBranch] // List of branches
 
     init(
@@ -76,6 +80,8 @@ struct GitStatus: Codable, Hashable {
         lastCommitMessage: String? = nil,
         lastCommitDate: Date? = nil,
         hasGitHubRemote: Bool = false,
+        incomingCommits: Int = 0,
+        outgoingCommits: Int = 0,
         branches: [GitBranch] = []
     ) {
         self.currentBranch = currentBranch
@@ -88,6 +94,8 @@ struct GitStatus: Codable, Hashable {
         self.lastCommitMessage = lastCommitMessage
         self.lastCommitDate = lastCommitDate
         self.hasGitHubRemote = hasGitHubRemote
+        self.incomingCommits = incomingCommits
+        self.outgoingCommits = outgoingCommits
         self.branches = branches
     }
 

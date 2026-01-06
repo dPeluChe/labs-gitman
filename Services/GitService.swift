@@ -126,14 +126,17 @@ actor GitService {
         async let lastCommit = getLastCommit(path: project.path, gitPath: gitPath)
         async let branches = getBranches(path: project.path, gitPath: gitPath)
 
-        let (branch, changes, untrackedFiles, modifiedFiles, stagedFiles, commit, branchList) = try await (
+        async let counts = getBehindAheadCounts(path: project.path, gitPath: gitPath)
+
+        let (branch, changes, untrackedFiles, modifiedFiles, stagedFiles, commit, branchList, behindAhead) = try await (
             currentBranch,
             hasChanges,
             untracked,
             modified,
             staged,
             lastCommit,
-            branches
+            branches,
+            counts
         )
         
         // Check GitHub integration
@@ -153,8 +156,40 @@ actor GitService {
             lastCommitMessage: commit.message,
             lastCommitDate: commit.date,
             hasGitHubRemote: isGitHub,
+            incomingCommits: behindAhead.behind,
+            outgoingCommits: behindAhead.ahead,
             branches: branchList
         )
+    }
+
+    private func getBehindAheadCounts(path: String, gitPath: String) async throws -> (behind: Int, ahead: Int) {
+        do {
+            // git rev-list --left-right --count HEAD...@{u}
+            // However, that fails if no upstream is set.
+            // Safer: git status -sb --porcelain=v2
+            // output usually: # branch.ab +0 -0
+            // but porcelain v2 is complex.
+            // Let's stick to 'git rev-list --count --left-right HEAD...@{u}' and catch error (e.g. no upstream)
+            
+            let output = try await processExecutor.execute(
+                command: gitPath,
+                arguments: ["rev-list", "--left-right", "--count", "HEAD...@{u}"],
+                directory: path
+            )
+            
+            // Output format: "ahead    behind" e.g. "1    5"
+            let parts = output.split(separator: "\t", omittingEmptySubsequences: true)
+                .flatMap { $0.split(separator: " ", omittingEmptySubsequences: true) }
+            
+            if parts.count >= 2,
+               let ahead = Int(parts[0]),
+               let behind = Int(parts[1]) {
+                return (behind, ahead)
+            }
+            return (0, 0)
+        } catch {
+            return (0, 0)
+        }
     }
 
     // MARK: - Git Operations
