@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 
 struct ProjectListView: View {
-    @StateObject private var viewModel = ProjectScannerViewModel()
+    @EnvironmentObject private var viewModel: ProjectScannerViewModel
     @StateObject private var settings = SettingsStore()
     @State private var showingAddPathSheet = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
@@ -30,48 +30,53 @@ struct ProjectListView: View {
     }
     
     // Computed property that applies filtering and sorting
+    // CRITICAL: This should ONLY process root projects, maintaining hierarchy
     private var processedProjects: [Project] {
-        processProjects(viewModel.projects)
+        // Start ONLY with root projects to prevent duplication
+        let rootProjectsOnly = viewModel.projects.filter { $0.isRoot }
+
+        // Process the hierarchy starting from roots only
+        let processed = processProjects(rootProjectsOnly)
+
+        return processed
     }
 
     var body: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             VStack(spacing: 0) {
+                // Cache Loading Banner
+                if viewModel.isLoadingFromCache {
+                    cacheLoadingBanner
+                }
+                
                 // Dependency Warning Banner
                 if !viewModel.missingDependencies.isEmpty {
                     dependencyWarningView
                 }
 
-                List(processedProjects, children: \.children, selection: $selection) { project in
-                    // We must handle the 'Dashboard' link separately or insert it into the list logic?
-                    // List with children and static items is tricky.
-                    // Instead, we use a Section or OutlineGroup.
-                    // But `sidebar` style List handles this if we structure it right.
-                    // Simplest: Static Dashboard Link + ForEach/OutlineGroup.
-                    
-                    // Actually, `List(content)` allows mixing.
-                    // To get recursion, we use `OutlineGroup(project.children ?? [], children: \.children)`.
-                    // But `List(data, children:)` is the standard for sidebar trees.
-                    // We can't mix static content easily with `List(data, children:)` unless we unify data types.
-                    
-                    // Strategy: Use DisclosureGroup recursively? Or OutlineGroup.
-                    // OutlineGroup(viewModel.projects, children: \.children) { row in ... }
-                    
-                    if project.id == viewModel.projects.first?.id { // Hacky way to check, better way below
-                         // Ideally we want Dashboard at top.
-                    }
-                    
-                     NavigationLink(value: SidebarSelection.project(project.id)) {
-                        ProjectRowView(project: project)
-                            .contextMenu {
-                                // Dynamic menu based on type
-                                contextMenuFor(project)
+                ZStack {
+                    // Use List with explicit ID to prevent rendering issues
+                    List(selection: $selection) {
+                        // Render hierarchy using recursive OutlineGroup
+                        ForEach(processedProjects) { rootProject in
+                            OutlineGroup(rootProject, children: \.children) { project in
+                                NavigationLink(value: SidebarSelection.project(project.id)) {
+                                    ProjectRowView(project: project)
+                                        .contextMenu {
+                                            contextMenuFor(project)
+                                        }
+                                }
                             }
+                        }
+                    }
+                    .listStyle(.sidebar)
+                    .searchable(text: $searchText, placement: .sidebar, prompt: "Search projects...")
+
+                    // Filter overlay
+                    if viewModel.isApplyingFilter {
+                        filteringOverlay
                     }
                 }
-                .listStyle(.sidebar)
-                .searchable(text: $searchText, placement: .sidebar, prompt: "Search projects...")
-                .animation(.spring(response: 0.4, dampingFraction: 0.8), value: viewModel.projects)
             }
             .navigationTitle("GitMonitor")
             .toolbar {
@@ -136,6 +141,12 @@ struct ProjectListView: View {
                         await viewModel.scanAllProjects()
                     }
                 }
+            }
+            .onChange(of: filterOption) { _, _ in
+                applyFilterWithAnimation()
+            }
+            .onChange(of: sortOption) { _, _ in
+                applyFilterWithAnimation()
             }
             // Shortcuts commented out to isolate issue
             // .onAppear {
@@ -221,6 +232,14 @@ struct ProjectListView: View {
     }
     
     private func processProjects(_ projects: [Project]) -> [Project] {
+        // DEBUG: Log input to verify we're only processing roots
+        #if DEBUG
+        print("🔍 processProjects: Input count = \(projects.count)")
+        for (idx, p) in projects.enumerated() {
+            print("  [\(idx)] \(p.name) - isRoot:\(p.isRoot) children:\(p.subProjects.count)")
+        }
+        #endif
+
         // Recursive function to process a single project (filter/sort children)
         func process(_ project: Project) -> Project? {
             // 1. Process children first
@@ -276,31 +295,197 @@ struct ProjectListView: View {
         
         // 1. Map and compact (filter out nil)
         var result = projects.compactMap { process($0) }
-        
+
         // 2. Sort top level
         result = sortProjects(result)
-        
-        return result
+
+        // 3. CRITICAL SAFETY CHECK: Ensure we're only returning root projects
+        // This prevents any children from being accidentally promoted to top level
+        let rootsOnly = result.filter { $0.isRoot }
+
+        #if DEBUG
+        if result.count != rootsOnly.count {
+            print("⚠️  WARNING: processProjects filtered out \(result.count - rootsOnly.count) non-root projects!")
+            let nonRoots = result.filter { !$0.isRoot }
+            for nr in nonRoots {
+                print("  - Non-root found: \(nr.name) (isRoot:\(nr.isRoot))")
+            }
+        }
+        print("✅ processProjects: Returning \(rootsOnly.count) root projects")
+        #endif
+
+        return rootsOnly
     }
     
     private func sortProjects(_ projects: [Project]) -> [Project] {
         return projects.sorted { p1, p2 in
+            // Special handling for Activity sort: ignore type hierarchy
+            if sortOption == .activity {
+                return sortByActivity(p1, p2: p2)
+            }
+
+            // For Name and Recent: respect type hierarchy first
+            let priority1 = projectTypePriority(p1)
+            let priority2 = projectTypePriority(p2)
+
+            if priority1 != priority2 {
+                return priority1 < priority2  // Lower number = higher priority
+            }
+
+            // Within same type: Apply selected sort
             switch sortOption {
             case .name:
                 return p1.name.localizedCaseInsensitiveCompare(p2.name) == .orderedAscending
+
             case .recent:
                 let date1 = p1.gitStatus?.lastCommitDate ?? p1.lastScanned
                 let date2 = p2.gitStatus?.lastCommitDate ?? p2.lastScanned
                 return date1 > date2
+
             case .activity:
-                let hasChanges1 = p1.gitStatus?.hasUncommittedChanges ?? false
-                let hasChanges2 = p2.gitStatus?.hasUncommittedChanges ?? false
-                if hasChanges1 != hasChanges2 { return hasChanges1 }
-                let date1 = p1.gitStatus?.lastCommitDate ?? p1.lastScanned
-                let date2 = p2.gitStatus?.lastCommitDate ?? p2.lastScanned
-                return date1 > date2
+                // Already handled above
+                return false
             }
         }
+    }
+
+    /// Sort projects by activity, ignoring type hierarchy
+    /// Priority: Changes > Outgoing > Incoming > Recent > Loading last
+    private func sortByActivity(_ p1: Project, p2: Project) -> Bool {
+        // Always keep ROOT at top
+        if p1.isRoot != p2.isRoot {
+            return p1.isRoot
+        }
+
+        // Get activity info (considering workspace children)
+        let activity1 = getActivityInfo(p1)
+        let activity2 = getActivityInfo(p2)
+
+        // 1. Loading projects go to the BOTTOM
+        if activity1.isLoading != activity2.isLoading {
+            return !activity1.isLoading  // Not loading comes first
+        }
+
+        // 2. Projects with uncommitted changes FIRST
+        if activity1.hasChanges != activity2.hasChanges {
+            return activity1.hasChanges
+        }
+
+        // 3. Projects with outgoing commits (push pending)
+        if activity1.hasOutgoing != activity2.hasOutgoing {
+            return activity1.hasOutgoing
+        }
+
+        // 4. Projects with incoming commits (pull needed)
+        if activity1.hasIncoming != activity2.hasIncoming {
+            return activity1.hasIncoming
+        }
+
+        // 5. Most recent activity (DEBUG)
+        let result = activity1.lastActivity > activity2.lastActivity
+
+        #if DEBUG
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        let date1Str = formatter.localizedString(for: activity1.lastActivity, relativeTo: Date())
+        let date2Str = formatter.localizedString(for: activity2.lastActivity, relativeTo: Date())
+
+        print("📅 Compare: \(p1.name) (\(date1Str)) vs \(p2.name) (\(date2Str)) → \(result ? "p1 first" : "p2 first")")
+        #endif
+
+        return result
+    }
+
+    /// Get activity info for a project (including workspace children)
+    private func getActivityInfo(_ project: Project) -> ActivityInfo {
+        if project.isWorkspace {
+            // For workspaces: aggregate activity from children
+            return getWorkspaceActivityInfo(project)
+        } else {
+            // For repos: use own git status
+            return ActivityInfo(
+                isLoading: project.isGitRepository && project.gitStatus == nil,
+                hasChanges: project.gitStatus?.hasUncommittedChanges ?? false,
+                hasOutgoing: (project.gitStatus?.outgoingCommits ?? 0) > 0,
+                hasIncoming: (project.gitStatus?.incomingCommits ?? 0) > 0,
+                lastActivity: project.gitStatus?.lastCommitDate ?? project.lastScanned
+            )
+        }
+    }
+
+    /// Get aggregated activity info from workspace children
+    private func getWorkspaceActivityInfo(_ workspace: Project) -> ActivityInfo {
+        var hasChanges = false
+        var hasOutgoing = false
+        var hasIncoming = false
+        var isLoading = false
+        var mostRecentActivity: Date?  // Start with nil
+        var hasAnyGitRepo = false
+
+        // Recursively check all children
+        func checkChildren(_ projects: [Project]) {
+            for child in projects {
+                if child.isGitRepository {
+                    hasAnyGitRepo = true
+
+                    if child.gitStatus == nil {
+                        isLoading = true
+                    } else {
+                        hasChanges = hasChanges || (child.gitStatus?.hasUncommittedChanges ?? false)
+                        hasOutgoing = hasOutgoing || ((child.gitStatus?.outgoingCommits ?? 0) > 0)
+                        hasIncoming = hasIncoming || ((child.gitStatus?.incomingCommits ?? 0) > 0)
+
+                        if let commitDate = child.gitStatus?.lastCommitDate {
+                            if mostRecentActivity == nil || commitDate > mostRecentActivity! {
+                                mostRecentActivity = commitDate
+                            }
+                        }
+                    }
+                }
+
+                // Recurse into nested workspaces
+                if !child.subProjects.isEmpty {
+                    checkChildren(child.subProjects)
+                }
+            }
+        }
+
+        checkChildren(workspace.subProjects)
+
+        // If workspace has no git repos or no activity data, use a very old date
+        // This pushes empty workspaces to the bottom (after all repos with commits)
+        let finalActivity = mostRecentActivity ?? Date.distantPast
+
+        return ActivityInfo(
+            isLoading: isLoading,
+            hasChanges: hasChanges,
+            hasOutgoing: hasOutgoing,
+            hasIncoming: hasIncoming,
+            lastActivity: finalActivity
+        )
+    }
+
+    struct ActivityInfo {
+        let isLoading: Bool
+        let hasChanges: Bool
+        let hasOutgoing: Bool
+        let hasIncoming: Bool
+        let lastActivity: Date
+    }
+    
+    /// Determine project type priority for hierarchical sorting
+    /// Lower number = appears first in list
+    private func projectTypePriority(_ project: Project) -> Int {
+        if project.isRoot {
+            return 0  // Monitored paths ALWAYS first
+        }
+        if project.isWorkspace {
+            return 1  // Workspaces second
+        }
+        if project.isGitRepository {
+            return 2  // Git repositories third
+        }
+        return 3  // Regular folders last
     }
     
     private var dependencyWarningView: some View {
@@ -385,24 +570,72 @@ struct ProjectListView: View {
     
     private var emptyStateView: some View {
         VStack(spacing: 24) {
-            Image(systemName: "square.stack.3d.up")
-                 .font(.system(size: 64))
-                 .foregroundColor(.secondary.opacity(0.5))
-             
-             VStack(spacing: 8) {
-                 Text("No Project Selected")
-                     .font(.title2)
-                     .fontWeight(.medium)
-                 Text("Select a project from the sidebar to view details.")
-                     .foregroundColor(.secondary)
-             }
-             
-             Button("Add Monitored Path") {
-                 showingAddPathSheet = true
-             }
-             .buttonStyle(.borderedProminent)
-             .controlSize(.large)
-         }
+             Image(systemName: "square.stack.3d.up")
+                  .font(.system(size: 64))
+                  .foregroundColor(.secondary.opacity(0.5))
+              
+              VStack(spacing: 8) {
+                  Text("No Project Selected")
+                      .font(.title2)
+                      .fontWeight(.medium)
+                  Text("Select a project from the sidebar to view details.")
+                      .foregroundColor(.secondary)
+              }
+              
+              Button("Add Monitored Path") {
+                  showingAddPathSheet = true
+              }
+              .buttonStyle(.borderedProminent)
+              .controlSize(.large)
+          }
+     }
+    
+    // MARK: - Loading Indicators
+    
+    private var cacheLoadingBanner: some View {
+        HStack(spacing: 10) {
+            ProgressView()
+                .controlSize(.small)
+            
+            Text("Loading from cache...")
+                .font(.caption)
+                .foregroundColor(.secondary)
+            
+            Spacer()
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(Color.blue.opacity(0.1))
+    }
+    
+    private var filteringOverlay: some View {
+        VStack {
+            Spacer()
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Applying filter...")
+                    .font(.caption)
+            }
+            .padding(12)
+            .background(.regularMaterial)
+            .cornerRadius(10)
+            .shadow(radius: 5)
+            Spacer()
+        }
+        .transition(.opacity.combined(with: .scale))
+    }
+    
+    private func applyFilterWithAnimation() {
+        viewModel.isApplyingFilter = true
+        
+        // Simulate brief delay for visual feedback
+        Task {
+            try? await Task.sleep(nanoseconds: 200_000_000) // 0.2s
+            await MainActor.run {
+                viewModel.isApplyingFilter = false
+            }
+        }
     }
 }
 

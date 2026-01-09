@@ -36,8 +36,43 @@ class ConfigStore: ObservableObject {
 
     private func loadMonitoredPaths() {
         if let savedPaths = defaults.stringArray(forKey: pathsKey) {
-            monitoredPaths = savedPaths
+            // Normalize paths and remove duplicates
+            let normalizedPaths = savedPaths.map { URL(fileURLWithPath: $0).standardized.path }
+
+            // Remove duplicates and nested paths
+            let deduplicated = deduplicatePaths(normalizedPaths)
+
+            monitoredPaths = deduplicated
+
+            // If we removed duplicates, save the cleaned list
+            if deduplicated.count != savedPaths.count {
+                logger.warning("⚠️  Removed \(savedPaths.count - deduplicated.count) duplicate/nested monitored paths")
+                saveMonitoredPaths()
+            }
         }
+    }
+
+    /// Remove duplicate and nested paths from monitored paths
+    /// Example: If we have ["/foo", "/foo/bar"], only keep "/foo"
+    private func deduplicatePaths(_ paths: [String]) -> [String] {
+        var uniquePaths: [String] = []
+
+        for path in paths {
+            // Check if this path is a child of any existing path
+            let isNested = uniquePaths.contains { existingPath in
+                path.hasPrefix(existingPath + "/") || path == existingPath
+            }
+
+            if !isNested {
+                // Check if any existing path is a child of this path
+                uniquePaths.removeAll { existingPath in
+                    existingPath.hasPrefix(path + "/")
+                }
+                uniquePaths.append(path)
+            }
+        }
+
+        return uniquePaths.sorted()
     }
 
     private func saveMonitoredPaths() {
@@ -69,41 +104,44 @@ class ConfigStore: ObservableObject {
     /// Scan all monitored paths and discover projects
     func scanMonitoredPaths() async -> [Project] {
         var discoveredProjects: [Project] = []
+        var visitedPaths: Set<String> = [] // Track visited paths to prevent duplicates
 
-        for path in monitoredPaths {
-            logger.debug("Scanning monitored path: \(path)")
-            let projectsInPath = await scanPathForProjects(path)
+        logger.info("🚀 Starting scan of \(self.monitoredPaths.count) monitored paths")
+
+        for path in self.monitoredPaths {
+            logger.debug("📂 Scanning monitored path: \(path)")
+
+            // Normalize path for deduplication
+            let normalizedPath = URL(fileURLWithPath: path).standardized.path
+            if visitedPaths.contains(normalizedPath) {
+                logger.warning("⚠️  Skipping duplicate monitored path: \(normalizedPath)")
+                continue
+            }
+            visitedPaths.insert(normalizedPath)
+
+            let projectsInPath = await scanPathForProjects(path, visitedPaths: &visitedPaths)
             discoveredProjects.append(contentsOf: projectsInPath)
+
+            logger.info("  ✅ Found \(projectsInPath.count) root project(s) in \(path)")
         }
 
-        // Merge with existing projects (update if exists, add if new)
-        for project in discoveredProjects {
-            if let index = projects.firstIndex(where: { $0.path == project.path }) {
-                // Keep existing git status if not updated yet, but update basic info
-                var updated = project
-                if let existing = projects[index].gitStatus {
-                    updated.gitStatus = existing
-                }
-                // Important: If we just detected it IS a git repo, ensure that sticks
-                if project.isGitRepository {
-                    updated.isGitRepository = true
-                }
-                projects[index] = updated
-            } else {
-                projects.append(project)
+        logger.info("🏁 Scan complete: \(discoveredProjects.count) total root projects discovered")
+
+        // CRITICAL SAFETY CHECK: Verify all discovered projects are marked as roots
+        #if DEBUG
+        let nonRoots = discoveredProjects.filter { !$0.isRoot }
+        if !nonRoots.isEmpty {
+            logger.error("❌ BUG: scanMonitoredPaths returned \(nonRoots.count) non-root projects!")
+            for nr in nonRoots {
+                logger.error("  - \(nr.name) at \(nr.path) (isRoot: false)")
             }
         }
+        #endif
 
-        // Remove projects that no longer exist
-        projects.removeAll { project in
-            !discoveredProjects.contains(where: { $0.path == project.path })
-        }
-
-        logger.debug("Total projects after scan: \(self.projects.count)")
-        return projects
+        return discoveredProjects
     }
 
-    private func scanPathForProjects(_ path: String) async -> [Project] {
+    private func scanPathForProjects(_ path: String, visitedPaths: inout Set<String>) async -> [Project] {
         var isDirectory: ObjCBool = false
 
         guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory),
@@ -113,17 +151,12 @@ class ConfigStore: ObservableObject {
         }
 
         // 1. If the monitored path itself is a git repo, return it as a single root item
-        if isGitRepo(path) {
-            if ignoredPaths.contains(path) { return [] }
-            logger.debug("Found git repo at root: \(path)")
-            var project = Project(path: path)
-            project.isGitRepository = true
-            return [project]
-        }
-
-        // 2. Scan immediate children to build the hierarchy
-        var childProjects: [Project] = []
+        // But here we want to return a root structure that contains children
+        // The root itself is created at the end.
         
+        // Check contents
+        var childProjects: [Project] = []
+        let fileManager = FileManager.default
         let url = URL(fileURLWithPath: path)
         let keys: [URLResourceKey] = [.isDirectoryKey, .nameKey]
         
@@ -133,46 +166,57 @@ class ConfigStore: ObservableObject {
         }
         
         for folderURL in contents {
-            let itemPath = folderURL.path
+            let itemPath = folderURL.standardized.path
             let name = folderURL.lastPathComponent
             
+            if visitedPaths.contains(itemPath) { continue }
+            
             // Skip system/common ignored items
-            if ignoredPaths.contains(itemPath) || name.hasPrefix(".") || ["node_modules", "Pods", "build", "dist"].contains(name) { continue }
+            if ignoredPaths.contains(itemPath) || name.hasPrefix(".") || ["node_modules", "Pods", "build", "dist", ".git"].contains(name) { continue }
             
             var isDir: ObjCBool = false
             guard fileManager.fileExists(atPath: itemPath, isDirectory: &isDir), isDir.boolValue else { continue }
             
+            visitedPaths.insert(itemPath)
+            
             if isGitRepo(itemPath) {
-                // Case 1: Direct Git Repository
+                logger.debug("✅ Found git repo: \(name)")
                 childProjects.append(Project(path: itemPath, isGitRepository: true))
             } else {
-                // Case 2: Folder. Check if it contains repos (Workspace) or is empty/files (Folder)
-                let subRepos = findGitRepositoriesRecursively(in: folderURL, currentDepth: 0, maxDepth: 2) // Limited depth for internal workspaces
+                let contents = try? fileManager.contentsOfDirectory(atPath: itemPath)
+                let hasWorkspaceFile = contents?.contains { 
+                    $0.hasSuffix(".code-workspace") || $0.hasSuffix(".xcworkspace")
+                } ?? false
                 
-                if !subRepos.isEmpty {
-                    // Feature: Internal Workspace (Folder containing repos)
-                    // We flatten the repos found inside this folder into this workspace's subSubjects
+                let subRepos = findGitRepositoriesRecursively(in: folderURL, currentDepth: 0, maxDepth: 2, visitedPaths: &visitedPaths)
+                
+                if subRepos.count >= 2 {
+                    logger.debug("🟡 Found workspace '\(name)' with \(subRepos.count) repos\(hasWorkspaceFile ? " (has workspace file)" : "")")
                     var workspace = Project(path: itemPath, isGitRepository: false, isWorkspace: true)
-                    workspace.subProjects = subRepos.sorted { $0.name < $1.name }
+                    workspace.subProjects = subRepos
                     childProjects.append(workspace)
+                } else if subRepos.count == 1 {
+                    logger.debug("📦 Found wrapper folder '\(name)' - showing inner repo directly")
+                    childProjects.append(contentsOf: subRepos)
+                } else if hasWorkspaceFile {
+                    logger.debug("🟡 Found workspace file in '\(name)' (no repos yet)")
+                    childProjects.append(Project(path: itemPath, isGitRepository: false, isWorkspace: true))
                 } else {
-                    // Feature: Non-Repo Folder (for review)
-                    // We add it only if it's not strictly ignored. The user requested to see "folders".
-                    // To avoid too much noise, we could filter empty folders, but let's show them for now.
-                    childProjects.append(Project(path: itemPath, isGitRepository: false))
+                    logger.debug("⏭️ Skipping empty folder: \(name)")
                 }
             }
         }
 
+
         // Create the Root Project (The Monitored Path) acting as the Top-Level Workspace
         var rootProject = Project(path: path, isGitRepository: false, isWorkspace: true, isRoot: true)
-        rootProject.subProjects = childProjects.sorted { $0.name < $1.name }
+        rootProject.subProjects = childProjects  // Sorting will be handled by UI layer
         
         return [rootProject]
     }
     
     /// Recursively find git repositories in a directory
-    private func findGitRepositoriesRecursively(in rootURL: URL, currentDepth: Int, maxDepth: Int) -> [Project] {
+    private func findGitRepositoriesRecursively(in rootURL: URL, currentDepth: Int, maxDepth: Int, visitedPaths: inout Set<String>) -> [Project] {
         if currentDepth >= maxDepth { return [] }
         
         var foundProjects: [Project] = []
@@ -183,7 +227,10 @@ class ConfigStore: ObservableObject {
         }
         
         for url in contents {
-            let path = url.path
+            let path = url.standardized.path
+            
+            // Deduplication check
+            if visitedPaths.contains(path) { continue }
             
             // Skip common dependency/build folders to improve performance and reduce noise
             if ["node_modules", "Pods", "Carthage", ".build", "build", "dist", "vendor", "venv", ".env"].contains(url.lastPathComponent) {
@@ -195,12 +242,15 @@ class ConfigStore: ObservableObject {
             var isDir: ObjCBool = false
             guard fileManager.fileExists(atPath: path, isDirectory: &isDir), isDir.boolValue else { continue }
             
+            // Mark as visited
+            visitedPaths.insert(path)
+            
             if isGitRepo(path) {
                 // Found one! Add it and do NOT recurse inside it (submodules handled by git)
                 foundProjects.append(Project(path: path, isGitRepository: true))
             } else {
                 // Recurse deeper
-                let deeperProjects = findGitRepositoriesRecursively(in: url, currentDepth: currentDepth + 1, maxDepth: maxDepth)
+                let deeperProjects = findGitRepositoriesRecursively(in: url, currentDepth: currentDepth + 1, maxDepth: maxDepth, visitedPaths: &visitedPaths)
                 foundProjects.append(contentsOf: deeperProjects)
             }
         }

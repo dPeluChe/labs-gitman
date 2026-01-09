@@ -110,11 +110,12 @@ class ProjectScannerViewModel: ObservableObject {
         for newProject in discoveredProjects {
             if let existing = projects.first(where: { $0.path == newProject.path }) {
                 var p = newProject
+                p.id = existing.id // Critical: Preserve ID to prevent list flashing/dups
                 p.gitStatus = existing.gitStatus
                 p.lastScanned = existing.lastScanned
                 p.lastReviewed = existing.lastReviewed
                 
-                // Preserve sub-projects status if it's a workspace
+                // Preserve sub-projects status/IDs if it's a workspace
                 if p.isWorkspace {
                     p.subProjects = mergeSubProjects(new: p.subProjects, existing: existing.subProjects)
                 }
@@ -127,6 +128,12 @@ class ProjectScannerViewModel: ObservableObject {
         
         let sortedProjects = mergedProjects.sorted { $0.name < $1.name }
         projects = sortedProjects
+        
+        // DEBUG: Log project structure
+        logger.info("📊 DEBUG: Total root projects: \(sortedProjects.count)")
+        for (index, project) in sortedProjects.enumerated() {
+            logger.info("  [\(index)] \(project.name) - isRoot:\(project.isRoot) isWorkspace:\(project.isWorkspace) children:\(project.subProjects.count)")
+        }
 
         // 3. Full refresh for all git repos
         await fullRefreshAllRepos()
@@ -192,7 +199,7 @@ class ProjectScannerViewModel: ObservableObject {
             let cachedStatus = project.gitStatus
             let gitStatus = try await gitService.getLightStatus(for: project, cachedStatus: cachedStatus)
             
-            await updateProjectStatus(projectId: project.id, status: gitStatus)
+            updateProjectStatus(projectId: project.id, status: gitStatus)
             
         } catch {
             logger.error("Light refresh failed for \(project.name): \(error)")
@@ -203,7 +210,7 @@ class ProjectScannerViewModel: ObservableObject {
     func fullRefreshProjectStatus(_ project: Project) async {
         do {
             let gitStatus = try await gitService.getStatus(for: project)
-            await updateProjectStatus(projectId: project.id, status: gitStatus)
+            updateProjectStatus(projectId: project.id, status: gitStatus)
             
         } catch {
             logger.error("Full refresh failed for \(project.name): \(error)")
@@ -274,9 +281,15 @@ class ProjectScannerViewModel: ObservableObject {
         new.map { newSub in
             var sub = newSub
             if let existingSub = existing.first(where: { $0.path == newSub.path }) {
+                sub.id = existingSub.id // Critical: Preserve ID
                 sub.gitStatus = existingSub.gitStatus
                 sub.lastScanned = existingSub.lastScanned
                 sub.lastReviewed = existingSub.lastReviewed
+                
+                // Recursively merge children if it's a workspace
+                if sub.isWorkspace {
+                    sub.subProjects = mergeSubProjects(new: sub.subProjects, existing: existingSub.subProjects)
+                }
             }
             return sub
         }
@@ -286,10 +299,11 @@ class ProjectScannerViewModel: ObservableObject {
     
     /// Get all git repositories as a flat array
     private func getAllGitReposFlattened() async -> [Project] {
-        await changeDetector.extractGitRepos(from: projects.flatMap { [$0] + $0.subProjects })
-            .flatMap { project in
-                [project] + getAllGitRepos(from: project)
-            }
+        var allRepos: [Project] = []
+        for project in projects {
+            allRepos.append(contentsOf: getAllGitRepos(from: project))
+        }
+        return allRepos
     }
     
     /// Recursively extract git repos from a project hierarchy
