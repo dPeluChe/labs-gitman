@@ -1,5 +1,12 @@
 # GitMonitor: Game Mode (2.5D) — Concept
 
+> **Implementation Status**: ✅ **MVP COMPLETE** (Phases 0-2)  
+> **Build Status**: ✅ Successful  
+> **Last Updated**: 2026-01-09  
+> See [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) for details.
+
+---
+
 ## Vision
 Transform GitMonitor from a traditional macOS app into a game-like “Git Monitoring Office” where you (the manager) dispatch workers/agents to project portals and receive visual reports.
 

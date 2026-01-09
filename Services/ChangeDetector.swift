@@ -58,7 +58,7 @@ actor ChangeDetector {
     ///   - threshold: Time threshold in seconds (default: 15 minutes)
     /// - Returns: True if full refresh is needed
     func needsFullRefresh(project: Project, threshold: TimeInterval = 900) -> Bool {
-        guard let gitStatus = project.gitStatus else {
+        guard project.gitStatus != nil else {
             // No status yet, needs full refresh
             return true
         }

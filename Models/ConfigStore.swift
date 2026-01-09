@@ -100,6 +100,82 @@ class ConfigStore: ObservableObject {
     }
 
     // MARK: - Project Discovery
+    
+    /// Fast discovery: Only checks folder structure, NO git commands
+    /// Perfect for Game Mode initial load - shows portals instantly
+    func discoverProjects() async -> [Project] {
+        var discoveredProjects: [Project] = []
+        var visitedPaths: Set<String> = []
+        
+        logger.info("🚀 Fast discovery of \(self.monitoredPaths.count) monitored paths (no git commands)")
+        
+        for path in self.monitoredPaths {
+            let normalizedPath = URL(fileURLWithPath: path).standardized.path
+            if visitedPaths.contains(normalizedPath) { continue }
+            visitedPaths.insert(normalizedPath)
+            
+            let projectsInPath = await discoverProjectsInPath(path, visitedPaths: &visitedPaths)
+            discoveredProjects.append(contentsOf: projectsInPath)
+            
+            logger.info("  ✅ Discovered \(projectsInPath.count) project(s) in \(path)")
+        }
+        
+        logger.info("🏁 Fast discovery complete: \(discoveredProjects.count) projects (ready for portals)")
+        return discoveredProjects
+    }
+    
+    /// Fast discovery helper - only checks .git folder existence
+    private func discoverProjectsInPath(_ path: String, visitedPaths: inout Set<String>) async -> [Project] {
+        var isDirectory: ObjCBool = false
+        guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory),
+              isDirectory.boolValue else {
+            return []
+        }
+        
+        var childProjects: [Project] = []
+        let url = URL(fileURLWithPath: path)
+        let keys: [URLResourceKey] = [.isDirectoryKey, .nameKey]
+        
+        guard let contents = try? fileManager.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: [.skipsHiddenFiles]) else {
+            return []
+        }
+        
+        for folderURL in contents {
+            let itemPath = folderURL.standardized.path
+            let name = folderURL.lastPathComponent
+            
+            if visitedPaths.contains(itemPath) { continue }
+            if ignoredPaths.contains(itemPath) || name.hasPrefix(".") || ["node_modules", "Pods", "build", "dist", ".git"].contains(name) { continue }
+            
+            var isDir: ObjCBool = false
+            guard fileManager.fileExists(atPath: itemPath, isDirectory: &isDir), isDir.boolValue else { continue }
+            
+            visitedPaths.insert(itemPath)
+            
+            // Only check if .git folder exists (FAST, no git commands)
+            if isGitRepo(itemPath) {
+                logger.debug("✅ Discovered git repo: \(name)")
+                childProjects.append(Project(path: itemPath, isGitRepository: true))
+            } else {
+                // Check for nested repos (shallow scan)
+                let subRepos = findGitRepositoriesRecursively(in: folderURL, currentDepth: 0, maxDepth: 2, visitedPaths: &visitedPaths)
+                
+                if subRepos.count >= 2 {
+                    logger.debug("🟡 Discovered workspace '\(name)' with \(subRepos.count) repos")
+                    var workspace = Project(path: itemPath, isGitRepository: false, isWorkspace: true)
+                    workspace.subProjects = subRepos
+                    childProjects.append(workspace)
+                } else if subRepos.count == 1 {
+                    childProjects.append(contentsOf: subRepos)
+                }
+            }
+        }
+        
+        let rootProject = Project(path: path, isGitRepository: isGitRepo(path), isWorkspace: !childProjects.isEmpty)
+        var root = rootProject
+        root.subProjects = childProjects
+        return [root]
+    }
 
     /// Scan all monitored paths and discover projects
     func scanMonitoredPaths() async -> [Project] {

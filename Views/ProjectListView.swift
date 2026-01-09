@@ -7,6 +7,7 @@ struct ProjectListView: View {
     @State private var showingAddPathSheet = false
     @State private var columnVisibility = NavigationSplitViewVisibility.all
     @State private var searchText = ""
+    @State private var gameModeEnabled = false
 
     // Filtering & Sorting
     @State private var filterOption: FilterOption = .all
@@ -42,6 +43,19 @@ struct ProjectListView: View {
     }
 
     var body: some View {
+        Group {
+            if gameModeEnabled {
+                GameModeView(scannerViewModel: viewModel)
+            } else {
+                traditionalUIView
+            }
+        }
+        .sheet(isPresented: $showingAddPathSheet) {
+            AddPathSheet(viewModel: viewModel)
+        }
+    }
+    
+    private var traditionalUIView: some View {
         NavigationSplitView(columnVisibility: $columnVisibility) {
             VStack(spacing: 0) {
                 // Cache Loading Banner
@@ -87,6 +101,13 @@ struct ProjectListView: View {
                 }
                 
                 ToolbarItem(placement: .automatic) {
+                    Toggle(isOn: $gameModeEnabled) {
+                        Label("Game Mode", systemImage: "gamecontroller.fill")
+                    }
+                    .help("Toggle Game Mode (2.5D Office View)")
+                }
+                
+                ToolbarItem(placement: .automatic) {
                     Menu {
                         Picker("Filter", selection: $filterOption) {
                             Text("All").tag(FilterOption.all)
@@ -118,9 +139,6 @@ struct ProjectListView: View {
                     }
                     .disabled(viewModel.isScanning)
                 }
-            }
-            .sheet(isPresented: $showingAddPathSheet) {
-                AddPathSheet(viewModel: viewModel)
             }
             .alert("Error", isPresented: .constant(viewModel.errorMessage != nil)) {
                 Button("OK") { viewModel.errorMessage = nil }

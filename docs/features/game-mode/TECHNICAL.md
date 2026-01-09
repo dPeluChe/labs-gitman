@@ -1,5 +1,13 @@
 # Game Mode (2.5D): Technical Implementation Guide
 
+> **Implementation Status**: ✅ **MVP COMPLETE** (Phases 0-2)  
+> **Build Status**: ✅ Successful (1 minor warning)  
+> **Files Created**: 15 new files (~1,800 lines)  
+> **Last Updated**: 2026-01-09  
+> See [IMPLEMENTATION_STATUS.md](./IMPLEMENTATION_STATUS.md) for full status.
+
+---
+
 ## Goals
 - Add a **Game Mode** surface without rewriting GitMonitor’s core architecture.
 - Reuse existing **Models**, **Services**, and **ViewModels** (especially `ProjectScannerViewModel`).
