@@ -420,14 +420,11 @@ struct ProjectListView: View {
         var hasIncoming = false
         var isLoading = false
         var mostRecentActivity: Date?  // Start with nil
-        var hasAnyGitRepo = false
 
         // Recursively check all children
         func checkChildren(_ projects: [Project]) {
             for child in projects {
                 if child.isGitRepository {
-                    hasAnyGitRepo = true
-
                     if child.gitStatus == nil {
                         isLoading = true
                     } else {

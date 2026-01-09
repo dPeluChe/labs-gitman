@@ -19,6 +19,7 @@ let package = Package(
             exclude: [
                 "Package.swift",
                 "README.md",
+                "CLAUDE.md",
                 "run.sh",
                 "docs",
                 "Tests",

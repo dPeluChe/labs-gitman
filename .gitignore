@@ -166,3 +166,6 @@ Package.resolved
 # Documentation
 docs/DRAFT/
 docs/WIP/
+CLAUDE.md
+.claude/
+.claude/settings.local.json
