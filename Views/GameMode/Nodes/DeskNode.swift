@@ -15,25 +15,38 @@ class DeskNode: SKNode {
     }
     
     private func setupDesk() {
-        deskShape = ShapeFactory.createIsometricTile(
+        // Shadow
+        let shadow = ShapeFactory.createShadow(width: 100, height: 40)
+        shadow.position = CGPoint(x: 0, y: -20)
+        addChild(shadow)
+
+        deskShape = ShapeFactory.createPrism(
             width: 120,
-            height: 60,
-            fillColor: NSColor(red: 0.4, green: 0.3, blue: 0.2, alpha: 1.0),
-            strokeColor: NSColor(red: 0.3, green: 0.2, blue: 0.1, alpha: 1.0),
-            lineWidth: 2
-        )
-        addChild(deskShape)
+            length: 60,
+            height: 40,
+            color: NSColor(red: 0.4, green: 0.3, blue: 0.2, alpha: 1.0)
+        ) as? SKShapeNode // Might be SKNode container
+        
+        let prism = ShapeFactory.createPrism(
+             width: 120,
+             length: 60,
+             height: 40,
+             color: NSColor(red: 0.4, green: 0.3, blue: 0.2, alpha: 1.0)
+         )
+        addChild(prism)
         
         nameLabel = SKLabelNode(text: "Manager Desk")
         nameLabel.fontName = "Helvetica-Bold"
         nameLabel.fontSize = 10
         nameLabel.fontColor = .white
-        nameLabel.position = CGPoint(x: 0, y: -40)
+        nameLabel.position = CGPoint(x: 0, y: 50) // Above desk
+        nameLabel.zPosition = 1
         addChild(nameLabel)
         
         let icon = SKLabelNode(text: "👤")
         icon.fontSize = 24
-        icon.position = CGPoint(x: 0, y: -5)
-        addChild(icon)
+        icon.position = CGPoint(x: 0, y: 10) // Front face
+        icon.zPosition = 1
+        prism.addChild(icon)
     }
 }

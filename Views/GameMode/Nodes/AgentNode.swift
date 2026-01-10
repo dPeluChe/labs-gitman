@@ -6,8 +6,10 @@ class AgentNode: SKNode {
     var stateMachine: GKStateMachine!
     
     // Helper to check if agent is free to take tasks
+    // Must be Idle AND not reserved by the dispatcher
+    var isReserved: Bool = false
     var isAvailable: Bool {
-        return stateMachine.currentState is AgentIdleState
+        return !isReserved && stateMachine.currentState is AgentIdleState
     }
     
     private var bodyNode: SKShapeNode!
@@ -15,6 +17,7 @@ class AgentNode: SKNode {
     private var directionIndicator: SKShapeNode!
     private var nameLabel: SKLabelNode!
     private var progressBar: SKNode?
+    private var selectionRing: SKShapeNode!
     
     private let agentColor: NSColor
     
@@ -43,6 +46,24 @@ class AgentNode: SKNode {
     }
     
     private func setupAgent(name: String) {
+        // Selection Ring (Hidden by default)
+        selectionRing = ShapeFactory.createCircle(
+            radius: 20,
+            fillColor: .clear,
+            strokeColor: .green,
+            lineWidth: 2
+        )
+        selectionRing.position = CGPoint(x: 0, y: -2)
+        selectionRing.zPosition = -2 // Below shadow
+        selectionRing.isHidden = true
+        addChild(selectionRing)
+        
+        // Shadow
+        let shadow = ShapeFactory.createShadow(width: 24, height: 12)
+        shadow.position = CGPoint(x: 0, y: -2)
+        shadow.zPosition = -1
+        addChild(shadow)
+
         bodyNode = ShapeFactory.createRoundedRect(
             size: CGSize(width: 30, height: 40),
             cornerRadius: 8,
@@ -50,6 +71,10 @@ class AgentNode: SKNode {
             strokeColor: agentColor.blended(withFraction: 0.3, of: .black),
             lineWidth: 2
         )
+        // Body pivot is center. If we want it "standing", we should offset body up.
+        // Current impl has pivot at center. So (0,0) is center of body.
+        // Let's assume (0,0) is "feet" for Z-sorting, so we should move body UP.
+        bodyNode.position = CGPoint(x: 0, y: 20)
         addChild(bodyNode)
         
         headNode = ShapeFactory.createCircle(
@@ -58,7 +83,7 @@ class AgentNode: SKNode {
             strokeColor: agentColor.blended(withFraction: 0.3, of: .black),
             lineWidth: 2
         )
-        headNode.position = CGPoint(x: 0, y: 30)
+        headNode.position = CGPoint(x: 0, y: 50) // 20 + 30
         addChild(headNode)
         
         directionIndicator = ShapeFactory.createTriangle(
@@ -66,15 +91,28 @@ class AgentNode: SKNode {
             fillColor: .white,
             strokeColor: .clear
         )
-        directionIndicator.position = CGPoint(x: 0, y: -25)
+        directionIndicator.position = CGPoint(x: 0, y: -5) // Near feet
         addChild(directionIndicator)
         
         nameLabel = SKLabelNode(text: name)
         nameLabel.fontName = "Helvetica-Bold"
         nameLabel.fontSize = 9
         nameLabel.fontColor = .white
-        nameLabel.position = CGPoint(x: 0, y: -45)
+        nameLabel.position = CGPoint(x: 0, y: 70)
         addChild(nameLabel)
+    }
+    
+    func setSelected(_ selected: Bool) {
+        selectionRing.isHidden = !selected
+        if selected {
+            selectionRing.run(SKAction.repeatForever(SKAction.sequence([
+                SKAction.scale(to: 1.1, duration: 0.5),
+                SKAction.scale(to: 1.0, duration: 0.5)
+            ])))
+        } else {
+            selectionRing.removeAllActions()
+            selectionRing.setScale(1.0)
+        }
     }
     
     // MARK: - Animation Primitives (Called by States)
@@ -119,7 +157,7 @@ class AgentNode: SKNode {
         await self.runAsync(moveAction)
         
         bodyNode.removeAction(forKey: "walk")
-        bodyNode.position = .zero // Reset bobbing offset
+        bodyNode.position = CGPoint(x: 0, y: 20) // Reset to standing offset
     }
     
     func startWorkingAnimation() {
@@ -203,6 +241,9 @@ class AgentNode: SKNode {
                 AgentAlertState(agentNode: self)
             ])
             self.stateMachine.enter(AgentMovingState.self)
+            
+            // Clear reservation now that state machine handles 'busy' status
+            self.isReserved = false
         }
     }
     

@@ -71,6 +71,83 @@ enum ShapeFactory {
         
         return container
     }
+    
+    /// Creates a 2.5D Isometric Prism (Block)
+    /// - Parameters:
+    ///   - width: Horizontal width (isometric X)
+    ///   - length: Horizontal depth (isometric Y)
+    ///   - height: Vertical height (Z in 3D, Y in screen)
+    ///   - color: Base color
+    static func createPrism(width: CGFloat, length: CGFloat, height: CGFloat, color: NSColor) -> SKNode {
+        let container = SKNode()
+        
+        // Colors for shading
+        let topColor = color.blended(withFraction: 0.1, of: .white) ?? color
+        let rightColor = color.blended(withFraction: 0.3, of: .black) ?? color
+        let leftColor = color.blended(withFraction: 0.5, of: .black) ?? color
+        
+        // Dimensions (Screen Space Projection)
+        // Isometric angle ~30 deg means width/2 step X corresponds to length/4 step Y?
+        // Let's match the IsometricGrid logic roughly:
+        // x -> (x - y) * tileW/2
+        // y -> (x + y) * tileH/2
+        
+        let w = width
+        let l = length
+        let h = height
+        
+        // Top Face (Diamond)
+        // Vertices relative to top-center of the block
+        let topPath = NSBezierPath()
+        topPath.move(to: CGPoint(x: 0, y: h)) // Top Center
+        topPath.line(to: CGPoint(x: w/2, y: h - l/4)) // Right
+        topPath.line(to: CGPoint(x: 0, y: h - l/2)) // Bottom
+        topPath.line(to: CGPoint(x: -w/2, y: h - l/4)) // Left
+        topPath.close()
+        
+        let topNode = SKShapeNode(path: topPath.cgPath)
+        topNode.fillColor = topColor
+        topNode.strokeColor = topColor.blended(withFraction: 0.2, of: .black) ?? .black
+        topNode.lineWidth = 1
+        container.addChild(topNode)
+        
+        // Right Face
+        let rightPath = NSBezierPath()
+        rightPath.move(to: CGPoint(x: 0, y: h - l/2)) // Top Left (of face)
+        rightPath.line(to: CGPoint(x: w/2, y: h - l/4)) // Top Right
+        rightPath.line(to: CGPoint(x: w/2, y: -l/4)) // Bottom Right
+        rightPath.line(to: CGPoint(x: 0, y: -l/2)) // Bottom Left
+        rightPath.close()
+        
+        let rightNode = SKShapeNode(path: rightPath.cgPath)
+        rightNode.fillColor = rightColor
+        rightNode.strokeColor = rightColor.blended(withFraction: 0.2, of: .black) ?? .black
+        rightNode.lineWidth = 1
+        container.addChild(rightNode)
+        
+        // Left Face
+        let leftPath = NSBezierPath()
+        leftPath.move(to: CGPoint(x: 0, y: h - l/2)) // Top Right (of face)
+        leftPath.line(to: CGPoint(x: -w/2, y: h - l/4)) // Top Left
+        leftPath.line(to: CGPoint(x: -w/2, y: -l/4)) // Bottom Left
+        leftPath.line(to: CGPoint(x: 0, y: -l/2)) // Bottom Right
+        leftPath.close()
+        
+        let leftNode = SKShapeNode(path: leftPath.cgPath)
+        leftNode.fillColor = leftColor
+        leftNode.strokeColor = leftColor.blended(withFraction: 0.2, of: .black) ?? .black
+        leftNode.lineWidth = 1
+        container.addChild(leftNode)
+        
+        return container
+    }
+    
+    static func createShadow(width: CGFloat, height: CGFloat) -> SKShapeNode {
+        let node = SKShapeNode(ellipseOf: CGSize(width: width, height: height))
+        node.fillColor = NSColor.black.withAlphaComponent(0.3)
+        node.strokeColor = .clear
+        return node
+    }
 }
 
 extension NSBezierPath {

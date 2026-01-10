@@ -124,19 +124,38 @@ Classes defined in `Views/GameMode/States/AgentStates.swift`:
 - **Scalability**: Easier to add new states (e.g., `AgentSleepingState`) without breaking existing code.
 - **Best Practice**: Standard pattern for SpriteKit games.
 
-## Task Queue (MVP-ready)
+## World Layout (Isometric 2.5D)
 
-### Requirements
-- Multiple clicks enqueue tasks.
-- If an agent is idle, assign immediately.
-- If no agents idle, task stays queued.
+All 2.5D content sits inside a `worldNode` centered on the screen.
+Depth sorting is handled manually in `update(_:)`:
+```swift
+agent.zPosition = grid.zPosition(for: agent.position.y)
+// returns -screenY (Lower on screen = Higher Z = Closer)
+```
 
-### MVP behavior
-- 2 agents.
-- FIFO queue.
-- If user clicks same project repeatedly:
-  - either allow duplicates (simple)
-  - or dedupe by `projectId` (optional)
+Geometry uses **Prisms** (ShapeFactory) instead of flat rects to give volume.
+
+## Parallel Task Queue
+
+### Logic
+The `GameCoordinator` maintains a FIFO queue.
+`OfficeScene` uses a **Dispatcher Pattern**:
+
+1. **Dispatcher (`processNextTask`)**:
+   - Loops synchronously.
+   - Finds *any* available agent.
+   - Marks agent as `isReserved`.
+   - Spawns a background `Task` (Worker).
+   - Recurses immediately to handle next queue item.
+
+2. **Worker (`performTask`)**:
+   - Moves agent (entering `MovingState` clears `isReserved` safely).
+   - Executes Git task.
+   - Reports back.
+
+### Concurrency Safety
+- **Race Condition Fix**: `isReserved` flag prevents the dispatcher from assigning 2 tasks to the same agent before the background task starts.
+- **MainActor**: All scene logic runs on Main Thread; Git logic runs detached.
 
 ## Threading & Performance
 

@@ -17,16 +17,21 @@ struct IsometricGrid {
     }
     
     func screenToLogical(point: CGPoint) -> (x: Int, y: Int) {
-        let x = Int((point.x / (tileWidth / 2) + point.y / (tileHeight / 2)) / 2)
-        let y = Int((point.y / (tileHeight / 2) - point.x / (tileWidth / 2)) / 2)
+        // Use lround to round to nearest integer, avoiding truncation bias
+        let x = lround((point.x / (tileWidth / 2) + point.y / (tileHeight / 2)) / 2)
+        let y = lround((point.y / (tileHeight / 2) - point.x / (tileWidth / 2)) / 2)
         return (x, y)
     }
     
     func zPosition(for logicalY: Int) -> CGFloat {
-        return CGFloat(logicalY)
+        // Not used often, but logical Y also goes "away" usually? 
+        // Let's rely on screenY mainly.
+        return -CGFloat(logicalY) * 10
     }
     
     func zPosition(for screenY: CGFloat) -> CGFloat {
-        return screenY
+        // Crucial for depth sorting:
+        // Lower Y (bottom of screen) = Closer to camera = Higher Z
+        return -screenY
     }
 }

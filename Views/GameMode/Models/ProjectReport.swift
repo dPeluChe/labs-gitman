@@ -5,11 +5,13 @@ struct ProjectReport: Identifiable, Equatable {
     let project: Project
     let status: GitStatus
     let completedAt: Date
+    var agentName: String?
     
-    init(project: Project, status: GitStatus) {
+    init(project: Project, status: GitStatus, agentName: String? = nil) {
         self.id = UUID()
         self.project = project
         self.status = status
+        self.agentName = agentName
         self.completedAt = Date()
     }
     

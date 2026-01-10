@@ -31,6 +31,8 @@ class GameCoordinator: ObservableObject {
         logger.info("🎮 Starting fast discovery for Game Mode...")
         defer { isDiscovering = false }
 
+        // ConfigStore.discoverProjects now runs in a detached task internally,
+        // so it won't block the Main Thread even if called here.
         let discovered = await configStore.discoverProjects()
         
         // Flatten to get all git repos (including nested ones)

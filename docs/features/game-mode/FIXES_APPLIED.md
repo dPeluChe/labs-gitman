@@ -209,21 +209,58 @@ allGitRepos.sort { p1, p2 in
 
 ---
 
-### 10. ✅ Detailed File List in Reports
-**Problema**: El reporte solo decía "X uncommitted changes" sin detalles.
+### 11. ✅ Thread Explosion Fix (Race Condition) (CRÍTICO)
+**Problema**: Clicks rápidos causaban una recursión infinita en el despachador de tareas (`processNextTask`), spawneando cientos de hilos y crasheando la app.
 
-**Fix Aplicado**:
+**Fix Aplicado**: Sistema de **Reserva Síncrona**.
 ```swift
 // OfficeScene.swift
-let allFiles = (
-    staged.map { "✅ \($0)" } +
-    modified.map { "📝 \($0)" } +
-    untracked.map { "❓ \($0)" }
-)
-// Muestra primeros 10 archivos en el Alert
+agent.isReserved = true // Bloqueo síncrono
+Task { await performTask(...) } // Tarea asíncrona
 ```
+**Resultado**: El despachador ya no asigna tareas duplicadas al mismo agente.
 
-**Resultado**: Al hacer click en el reporte, ves exactamente qué archivos cambiaste.
+---
+
+### 12. ✅ Continuation Misuse Crash (CRÍTICO)
+**Problema**: Crash `SWIFT TASK CONTINUATION MISUSE`. Reusar `AgentMovingState` con una continuación vieja causaba que se intentara resumir dos veces.
+
+**Fix Aplicado**:
+- Eliminada la re-entrada manual al estado en `performTask`.
+- `commandMove` ahora maneja el ciclo de vida completo del estado, limpiando el flag `isReserved` solo cuando es seguro.
+
+**Resultado**: Estabilidad total en movimientos.
+
+---
+
+### 13. ✅ Parallelism Bottleneck Fix
+**Problema**: Agente 2 esperaba a Agente 1 para trabajar, aunque estuviera libre.
+
+**Fix Aplicado**:
+- `processNextTask` ahora recurre **inmediatamente** tras lanzar una tarea (Fire and Forget).
+- Al terminar un movimiento manual, el agente llama a `processNextTask()` para "pedir trabajo".
+
+**Resultado**: Paralelismo real. Ambos agentes trabajan simultáneamente.
+
+---
+
+### 14. ✅ Loading Performance Fix
+**Problema**: Pantalla gris al entrar a Game Mode (bloqueo de Main Thread por scan de archivos).
+
+**Fix Aplicado**: `ConfigStore.discoverProjects` movido a `Task.detached` con helpers estáticos no aislados.
+
+**Resultado**: Carga instantánea de la UI, portales aparecen progresivamente.
+
+---
+
+### 15. ✅ Click Offset & Boundaries Fix
+**Problema**: Clicks en el suelo se registraban en el tile equivocado; agentes salían del mapa.
+
+**Fix Aplicado**:
+- Uso de `lround()` en `IsometricGrid` para precisión.
+- Clamping de coordenadas en `moveSelectedAgent`.
+
+**Resultado**: Control RTS preciso y seguro.
 
 ---
 
@@ -233,13 +270,14 @@ let allFiles = (
 |---------|---------|--------|
 | `GameConstants.swift` | ✨ Nuevo archivo | +63 |
 | `GameCoordinator.swift` | Race condition fix + Sorting | +20 |
-| `OfficeScene.swift` | Portal refresh + tap handler + constants | +40 |
+| `OfficeScene.swift` | Portal refresh + tap handler + constants | +150 |
 | `GameModeView.swift` | Auto-refresh portals | +4 |
 | `ChangeDetector.swift` | Warning fix | -1 |
 | `ShapeFactory.swift` | Exhaustive switch | +4 |
 | `GitService.swift` | Thread-safe Executor | +15 |
 | `AgentStates.swift` | GKStateMachine classes | +120 |
-| **TOTAL** | | **+265 líneas** |
+| `AgentNode.swift` | isReserved logic | +20 |
+| **TOTAL** | | **+400 líneas** |
 
 ---
 
@@ -247,7 +285,7 @@ let allFiles = (
 
 ```bash
 swift build
-# Build complete! (2.63s)
+# Build complete! (4.81s)
 # 0 errors, 0 warnings
 ```
 

@@ -103,29 +103,42 @@ class ConfigStore: ObservableObject {
     
     /// Fast discovery: Only checks folder structure, NO git commands
     /// Perfect for Game Mode initial load - shows portals instantly
+    /// Runs on detached task to prevent UI freeze
     func discoverProjects() async -> [Project] {
+        let paths = self.monitoredPaths
+        let ignored = self.ignoredPaths
+        
+        logger.info("🚀 Fast discovery of \(paths.count) monitored paths (background)")
+        
+        return await Task.detached(priority: .userInitiated) {
+            return await ConfigStore.performFastScan(paths: paths, ignoredPaths: ignored)
+        }.value
+    }
+    
+    /// Static worker for background scanning
+    private static func performFastScan(paths: [String], ignoredPaths: [String]) async -> [Project] {
         var discoveredProjects: [Project] = []
         var visitedPaths: Set<String> = []
+        let fileManager = FileManager.default
+        let logger = Logger(subsystem: "com.gitmonitor", category: "ConfigStore")
         
-        logger.info("🚀 Fast discovery of \(self.monitoredPaths.count) monitored paths (no git commands)")
-        
-        for path in self.monitoredPaths {
+        for path in paths {
             let normalizedPath = URL(fileURLWithPath: path).standardized.path
             if visitedPaths.contains(normalizedPath) { continue }
             visitedPaths.insert(normalizedPath)
             
-            let projectsInPath = await discoverProjectsInPath(path, visitedPaths: &visitedPaths)
+            let projectsInPath = await discoverProjectsInPath(path, visitedPaths: &visitedPaths, ignoredPaths: ignoredPaths, fileManager: fileManager, logger: logger)
             discoveredProjects.append(contentsOf: projectsInPath)
             
             logger.info("  ✅ Discovered \(projectsInPath.count) project(s) in \(path)")
         }
         
-        logger.info("🏁 Fast discovery complete: \(discoveredProjects.count) projects (ready for portals)")
+        logger.info("🏁 Fast discovery complete: \(discoveredProjects.count) projects")
         return discoveredProjects
     }
     
     /// Fast discovery helper - only checks .git folder existence
-    private func discoverProjectsInPath(_ path: String, visitedPaths: inout Set<String>) async -> [Project] {
+    private static func discoverProjectsInPath(_ path: String, visitedPaths: inout Set<String>, ignoredPaths: [String], fileManager: FileManager, logger: Logger) async -> [Project] {
         var isDirectory: ObjCBool = false
         guard fileManager.fileExists(atPath: path, isDirectory: &isDirectory),
               isDirectory.boolValue else {
@@ -158,7 +171,7 @@ class ConfigStore: ObservableObject {
                 childProjects.append(Project(path: itemPath, isGitRepository: true))
             } else {
                 // Check for nested repos (shallow scan)
-                let subRepos = findGitRepositoriesRecursively(in: folderURL, currentDepth: 0, maxDepth: 2, visitedPaths: &visitedPaths)
+                let subRepos = findGitRepositoriesRecursively(in: folderURL, currentDepth: 0, maxDepth: 2, visitedPaths: &visitedPaths, ignoredPaths: ignoredPaths)
                 
                 if subRepos.count >= 2 {
                     logger.debug("🟡 Discovered workspace '\(name)' with \(subRepos.count) repos")
@@ -255,7 +268,7 @@ class ConfigStore: ObservableObject {
             
             visitedPaths.insert(itemPath)
             
-            if isGitRepo(itemPath) {
+            if ConfigStore.isGitRepo(itemPath) {
                 logger.debug("✅ Found git repo: \(name)")
                 childProjects.append(Project(path: itemPath, isGitRepository: true))
             } else {
@@ -264,7 +277,7 @@ class ConfigStore: ObservableObject {
                     $0.hasSuffix(".code-workspace") || $0.hasSuffix(".xcworkspace")
                 } ?? false
                 
-                let subRepos = findGitRepositoriesRecursively(in: folderURL, currentDepth: 0, maxDepth: 2, visitedPaths: &visitedPaths)
+                let subRepos = ConfigStore.findGitRepositoriesRecursively(in: folderURL, currentDepth: 0, maxDepth: 2, visitedPaths: &visitedPaths, ignoredPaths: ignoredPaths)
                 
                 if subRepos.count >= 2 {
                     logger.debug("🟡 Found workspace '\(name)' with \(subRepos.count) repos\(hasWorkspaceFile ? " (has workspace file)" : "")")
@@ -292,9 +305,9 @@ class ConfigStore: ObservableObject {
     }
     
     /// Recursively find git repositories in a directory
-    private func findGitRepositoriesRecursively(in rootURL: URL, currentDepth: Int, maxDepth: Int, visitedPaths: inout Set<String>) -> [Project] {
+    private static func findGitRepositoriesRecursively(in rootURL: URL, currentDepth: Int, maxDepth: Int, visitedPaths: inout Set<String>, ignoredPaths: [String]) -> [Project] {
         if currentDepth >= maxDepth { return [] }
-        
+        let fileManager = FileManager.default
         var foundProjects: [Project] = []
         let keys: [URLResourceKey] = [.isDirectoryKey]
         
@@ -326,7 +339,7 @@ class ConfigStore: ObservableObject {
                 foundProjects.append(Project(path: path, isGitRepository: true))
             } else {
                 // Recurse deeper
-                let deeperProjects = findGitRepositoriesRecursively(in: url, currentDepth: currentDepth + 1, maxDepth: maxDepth, visitedPaths: &visitedPaths)
+                let deeperProjects = findGitRepositoriesRecursively(in: url, currentDepth: currentDepth + 1, maxDepth: maxDepth, visitedPaths: &visitedPaths, ignoredPaths: ignoredPaths)
                 foundProjects.append(contentsOf: deeperProjects)
             }
         }
@@ -334,7 +347,8 @@ class ConfigStore: ObservableObject {
         return foundProjects
     }
 
-    private func isGitRepo(_ path: String) -> Bool {
+    static func isGitRepo(_ path: String) -> Bool {
+        let fileManager = FileManager.default
         let gitPath = (path as NSString).appendingPathComponent(".git")
         var isDir: ObjCBool = false
         return fileManager.fileExists(atPath: gitPath, isDirectory: &isDir)

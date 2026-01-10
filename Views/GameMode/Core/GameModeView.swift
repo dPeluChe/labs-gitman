@@ -81,34 +81,7 @@ struct GameModeView: View {
                 
                 Spacer()
                 
-                if !coordinator.activeReports.isEmpty {
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text("Recent Activity")
-                            .font(.caption)
-                            .foregroundColor(.white.opacity(0.7))
-                        
-                        ForEach(coordinator.activeReports.prefix(3)) { report in
-                            HStack {
-                                Text(report.hasIssues ? "⚠️" : "✅")
-                                Text(report.project.name)
-                                    .font(.caption)
-                                    .foregroundColor(.white)
-                                Spacer()
-                                Text(timeAgo(report.completedAt))
-                                    .font(.caption2)
-                                    .foregroundColor(.white.opacity(0.5))
-                            }
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 6)
-                            .background(report.hasIssues ? Color.orange.opacity(0.2) : Color.green.opacity(0.2))
-                            .cornerRadius(6)
-                        }
-                    }
-                    .padding()
-                    .background(Color.black.opacity(0.6))
-                    .cornerRadius(12)
-                    .padding()
-                }
+                // Recent Activity removed (handled by 2.5D ReportBoard)
             }
         }
         .onAppear {

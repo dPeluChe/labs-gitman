@@ -29,14 +29,30 @@ class ProjectPortalNode: SKNode {
     }
     
     private func setupPortal() {
-        portalShape = ShapeFactory.createRoundedRect(
-            size: CGSize(width: 80, height: 100),
-            cornerRadius: 12,
-            fillColor: portalColor(),
-            strokeColor: portalColor().blended(withFraction: 0.3, of: .black),
-            lineWidth: 3
+        // Shadow
+        let shadow = ShapeFactory.createShadow(width: GameConstants.portalWidth, height: GameConstants.portalWidth/2)
+        shadow.position = CGPoint(x: 0, y: -GameConstants.portalWidth/3)
+        addChild(shadow)
+        
+        // 2.5D Prism Body
+        // Width: 60, Length (Depth): 60, Height: 80
+        portalShape = ShapeFactory.createPrism(
+            width: GameConstants.portalWidth, 
+            length: GameConstants.portalWidth, 
+            height: GameConstants.portalHeight, 
+            color: portalColor()
+        ) as? SKShapeNode // Cast might fail if createPrism returns SKNode, but we don't need it to be ShapeNode specifically here unless we change color
+        
+        // Actually createPrism returns SKNode container, so we need to handle color updates differently
+        // Let's keep a reference to the container
+        let prism = ShapeFactory.createPrism(
+            width: GameConstants.portalWidth, 
+            length: GameConstants.portalWidth, 
+            height: GameConstants.portalHeight, 
+            color: portalColor()
         )
-        addChild(portalShape)
+        prism.name = "prism"
+        addChild(prism)
         
         statusIndicator = ShapeFactory.createCircle(
             radius: 8,
@@ -44,28 +60,29 @@ class ProjectPortalNode: SKNode {
             strokeColor: .white,
             lineWidth: 2
         )
-        statusIndicator.position = CGPoint(x: 30, y: 40)
+        statusIndicator.position = CGPoint(x: 0, y: GameConstants.portalHeight + 10) // Floating above
         addChild(statusIndicator)
         
         nameLabel = SKLabelNode(text: project.name)
         nameLabel.fontName = "Helvetica-Bold"
         nameLabel.fontSize = 10
         nameLabel.fontColor = .white
-        nameLabel.position = CGPoint(x: 0, y: -60)
+        nameLabel.position = CGPoint(x: 0, y: GameConstants.portalHeight + 30)
         nameLabel.preferredMaxLayoutWidth = 100
         nameLabel.numberOfLines = 2
         addChild(nameLabel)
         
         let icon = SKLabelNode(text: "📁")
-        icon.fontSize = 32
-        icon.position = CGPoint(x: 0, y: -5)
-        addChild(icon)
+        icon.fontSize = 24
+        icon.position = CGPoint(x: 0, y: GameConstants.portalHeight/2) // On the front face
+        icon.zPosition = 1 // Ensure it's in front of faces
+        prism.addChild(icon)
         
         statsLabel = SKLabelNode(text: "")
         statsLabel.fontName = "Menlo-Regular"
         statsLabel.fontSize = 8
         statsLabel.fontColor = NSColor(white: 0.9, alpha: 1.0)
-        statsLabel.position = CGPoint(x: 0, y: -30)
+        statsLabel.position = CGPoint(x: 0, y: GameConstants.portalHeight + 50)
         addChild(statsLabel)
         
         isUserInteractionEnabled = true
@@ -102,10 +119,35 @@ class ProjectPortalNode: SKNode {
     }
     
     func updateStatus() {
-        portalShape.fillColor = portalColor()
-        portalShape.strokeColor = portalColor().blended(withFraction: 0.3, of: .black) ?? portalColor()
-        statusIndicator.fillColor = statusColor()
+        // Re-create prism on status change because updating 3 separate faces is complex without proper reference
+        // Optimization: In real game engine we'd update texture/color property. Here we just rebuild.
+        if let oldPrism = childNode(withName: "prism") {
+            oldPrism.removeAllChildren() // Remove icon
+            oldPrism.removeFromParent()
+            
+            let newPrism = ShapeFactory.createPrism(
+                width: GameConstants.portalWidth,
+                length: GameConstants.portalWidth,
+                height: GameConstants.portalHeight,
+                color: portalColor()
+            )
+            newPrism.name = "prism"
+            newPrism.zPosition = 0
+            addChild(newPrism)
+            
+            // Re-add icon
+            let icon = SKLabelNode(text: "📁")
+            icon.fontSize = 24
+            icon.position = CGPoint(x: 0, y: GameConstants.portalHeight/2)
+            icon.zPosition = 1
+            newPrism.addChild(icon)
+            
+            // Re-order siblings if needed, but addChild puts it at end. 
+            // We want prism behind labels.
+            newPrism.zPosition = -1 
+        }
 
+        statusIndicator.fillColor = statusColor()
         nameLabel.text = project.name
         
         if let status = project.gitStatus {

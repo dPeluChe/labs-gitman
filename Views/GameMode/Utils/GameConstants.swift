@@ -5,12 +5,12 @@ struct GameConstants {
     // Scene
     static let sceneWidth: CGFloat = 1200
     static let sceneHeight: CGFloat = 800
-    static let floorGridSize = 8
+    static let floorGridSize = 12
     
     // Portals
-    static let maxPortals = 6
-    static let portalWidth: CGFloat = 80
-    static let portalHeight: CGFloat = 100
+    static let maxPortals = 10 // Increased capacity
+    static let portalWidth: CGFloat = 50
+    static let portalHeight: CGFloat = 70
     static let portalSpacingX: CGFloat = 120
     static let portalSpacingY: CGFloat = 140
     static let portalStartX: CGFloat = 0.2
@@ -30,7 +30,7 @@ struct GameConstants {
     // Report Board
     static let reportBoardWidth: CGFloat = 350
     static let reportBoardHeight: CGFloat = 150
-    static let reportBoardYPosition: CGFloat = 0.75
+    static let reportBoardYPosition: CGFloat = 0.15 // Moved to bottom
     
     // Animations
     static let moveDuration: TimeInterval = 1.0
@@ -40,8 +40,8 @@ struct GameConstants {
     static let celebrationDuration: TimeInterval = 1.0
     
     // Isometric Grid
-    static let tileWidth: CGFloat = 80
-    static let tileHeight: CGFloat = 40
+    static let tileWidth: CGFloat = 100 // Bigger tiles
+    static let tileHeight: CGFloat = 50 // Bigger tiles
     
     // Colors
     struct Colors {
