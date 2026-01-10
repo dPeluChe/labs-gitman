@@ -45,7 +45,7 @@ struct ProjectListView: View {
     var body: some View {
         Group {
             if gameModeEnabled {
-                GameModeView(scannerViewModel: viewModel)
+                GameModeView(scannerViewModel: viewModel, isGameModeEnabled: $gameModeEnabled)
             } else {
                 traditionalUIView
             }
@@ -250,14 +250,6 @@ struct ProjectListView: View {
     }
     
     private func processProjects(_ projects: [Project]) -> [Project] {
-        // DEBUG: Log input to verify we're only processing roots
-        #if DEBUG
-        print("🔍 processProjects: Input count = \(projects.count)")
-        for (idx, p) in projects.enumerated() {
-            print("  [\(idx)] \(p.name) - isRoot:\(p.isRoot) children:\(p.subProjects.count)")
-        }
-        #endif
-
         // Recursive function to process a single project (filter/sort children)
         func process(_ project: Project) -> Project? {
             // 1. Process children first
@@ -320,17 +312,6 @@ struct ProjectListView: View {
         // 3. CRITICAL SAFETY CHECK: Ensure we're only returning root projects
         // This prevents any children from being accidentally promoted to top level
         let rootsOnly = result.filter { $0.isRoot }
-
-        #if DEBUG
-        if result.count != rootsOnly.count {
-            print("⚠️  WARNING: processProjects filtered out \(result.count - rootsOnly.count) non-root projects!")
-            let nonRoots = result.filter { !$0.isRoot }
-            for nr in nonRoots {
-                print("  - Non-root found: \(nr.name) (isRoot:\(nr.isRoot))")
-            }
-        }
-        print("✅ processProjects: Returning \(rootsOnly.count) root projects")
-        #endif
 
         return rootsOnly
     }
@@ -401,15 +382,6 @@ struct ProjectListView: View {
 
         // 5. Most recent activity (DEBUG)
         let result = activity1.lastActivity > activity2.lastActivity
-
-        #if DEBUG
-        let formatter = RelativeDateTimeFormatter()
-        formatter.unitsStyle = .short
-        let date1Str = formatter.localizedString(for: activity1.lastActivity, relativeTo: Date())
-        let date2Str = formatter.localizedString(for: activity2.lastActivity, relativeTo: Date())
-
-        print("📅 Compare: \(p1.name) (\(date1Str)) vs \(p2.name) (\(date2Str)) → \(result ? "p1 first" : "p2 first")")
-        #endif
 
         return result
     }

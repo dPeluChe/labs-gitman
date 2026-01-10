@@ -1,7 +1,7 @@
 import SpriteKit
 
 class ProjectPortalNode: SKNode {
-    let project: Project
+    var project: Project
     private var portalShape: SKShapeNode!
     private var statusIndicator: SKShapeNode!
     private var nameLabel: SKLabelNode!
@@ -15,6 +15,12 @@ class ProjectPortalNode: SKNode {
         self.position = position
         self.name = "portal_\(project.id.uuidString)"
         setupPortal()
+        updateStatus()
+    }
+
+    func applyStatus(_ status: GitStatus) {
+        project.gitStatus = status
+        project.lastScanned = Date()
         updateStatus()
     }
     
@@ -99,6 +105,8 @@ class ProjectPortalNode: SKNode {
         portalShape.fillColor = portalColor()
         portalShape.strokeColor = portalColor().blended(withFraction: 0.3, of: .black) ?? portalColor()
         statusIndicator.fillColor = statusColor()
+
+        nameLabel.text = project.name
         
         if let status = project.gitStatus {
             var stats: [String] = []

@@ -5,11 +5,13 @@ struct GameModeView: View {
     @StateObject private var coordinator: GameCoordinator
     @StateObject private var sceneStore: GameSceneStore
     @ObservedObject var scannerViewModel: ProjectScannerViewModel
+    @Binding var isGameModeEnabled: Bool
     
     @State private var showDebugOverlay = false
     
-    init(scannerViewModel: ProjectScannerViewModel) {
+    init(scannerViewModel: ProjectScannerViewModel, isGameModeEnabled: Binding<Bool>) {
         self.scannerViewModel = scannerViewModel
+        self._isGameModeEnabled = isGameModeEnabled
         
         let coordinator = GameCoordinator(scannerViewModel: scannerViewModel)
         self._coordinator = StateObject(wrappedValue: coordinator)
@@ -23,6 +25,15 @@ struct GameModeView: View {
             
             VStack {
                 HStack {
+                    Button(action: {
+                        coordinator.stopAutoPlay()
+                        isGameModeEnabled = false
+                    }) {
+                        Label("Back", systemImage: "chevron.left")
+                    }
+                    .buttonStyle(.bordered)
+                    .padding()
+
                     Button(action: {
                         Task {
                             await coordinator.discoverProjectsForGameMode()
@@ -109,9 +120,8 @@ struct GameModeView: View {
                 sceneStore.scene.refreshPortals()
             }
         }
-        .onChange(of: coordinator.projects) { _, _ in
-            // Refresh portals when projects change (after discovery or git updates)
-            sceneStore.scene.refreshPortals()
+        .onDisappear {
+            coordinator.stopAutoPlay()
         }
     }
     

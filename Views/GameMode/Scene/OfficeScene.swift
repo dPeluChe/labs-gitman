@@ -15,6 +15,8 @@ class OfficeScene: SKScene {
     
     private var agents: [AgentNode] = []
     private var portals: [ProjectPortalNode] = []
+
+    private var isProcessingQueue: Bool = false
     
     private var lastUpdateTime: TimeInterval = 0
     private var frameCount: Int = 0
@@ -116,10 +118,7 @@ class OfficeScene: SKScene {
     
     private func setupProjectPortals() {
         guard let coordinator = coordinator else { return }
-        
-        portals.forEach { $0.removeFromParent() }
-        portals.removeAll()
-        
+
         let gitRepos = coordinator.projects.filter { $0.isGitRepository }
         let maxPortals = min(gitRepos.count, GameConstants.maxPortals)
         
@@ -127,7 +126,13 @@ class OfficeScene: SKScene {
         
         if gitRepos.isEmpty {
             logger.warning("⚠️ No git repos to show! Make sure you've added monitored paths.")
+            if !portals.isEmpty {
+                return
+            }
         }
+
+        portals.forEach { $0.removeFromParent() }
+        portals.removeAll()
         
         for (index, project) in gitRepos.prefix(maxPortals).enumerated() {
             let row = index / 3
@@ -140,8 +145,9 @@ class OfficeScene: SKScene {
             
             let portal = ProjectPortalNode(project: project, position: portalPos)
             portal.zPosition = 15
-            portal.onTap = { [weak self] in
-                self?.handlePortalTap(project)
+            portal.onTap = { [weak self, weak portal] in
+                guard let portal else { return }
+                self?.handlePortalTap(portal.project)
             }
             addChild(portal)
             portals.append(portal)
@@ -153,8 +159,10 @@ class OfficeScene: SKScene {
         
         coordinator.enqueueTask(for: project)
         
-        Task {
-            await processNextTask()
+        if !isProcessingQueue {
+            Task {
+                await processNextTask()
+            }
         }
     }
     
@@ -165,11 +173,30 @@ class OfficeScene: SKScene {
         alert.messageText = "📂 \(report.project.name)"
         
         if report.status.hasUncommittedChanges {
-            let total = report.status.modifiedFiles.count + report.status.untrackedFiles.count + report.status.stagedFiles.count
-            alert.informativeText = "⚠️ \(total) uncommitted changes\n\nBranch: \(report.status.currentBranch)"
+            let modified = report.status.modifiedFiles
+            let untracked = report.status.untrackedFiles
+            let staged = report.status.stagedFiles
+            let totalCount = modified.count + untracked.count + staged.count
+            
+            var details = "⚠️ \(totalCount) uncommitted changes\nBranch: \(report.status.currentBranch)\n\n"
+            
+            let allFiles = (
+                staged.map { "✅ \($0)" } +
+                modified.map { "📝 \($0)" } +
+                untracked.map { "❓ \($0)" }
+            )
+            
+            let showCount = min(allFiles.count, 10)
+            details += allFiles.prefix(showCount).joined(separator: "\n")
+            
+            if allFiles.count > showCount {
+                details += "\n...and \(allFiles.count - showCount) more"
+            }
+            
+            alert.informativeText = details
             alert.alertStyle = .warning
         } else {
-            alert.informativeText = "✅ Clean working directory\n\nBranch: \(report.status.currentBranch)"
+            alert.informativeText = "✅ Clean working directory\n\nBranch: \(report.status.currentBranch)\nLast commit: \(report.status.lastCommitMessage ?? "Unknown")"
             alert.alertStyle = .informational
         }
         
@@ -178,67 +205,68 @@ class OfficeScene: SKScene {
     }
     
     private func processNextTask() async {
+        isProcessingQueue = true
+        defer { isProcessingQueue = false }
+
         guard let coordinator = coordinator else { return }
-        guard let agent = agents.first(where: { $0.state.isAvailable }) else {
+        
+        // Find agent in IdleState
+        guard let agent = agents.first(where: { $0.isAvailable }) else {
             logger.warning("No available agents")
             return
         }
         
         guard let task = coordinator.dequeueTask() else { return }
         
-        guard let portal = portals.first(where: { $0.project.id == task.project.id }) else {
+        guard let portal = portals.first(where: { $0.project.path == task.project.path }) else {
             logger.warning("Portal not found for project: \(task.project.name)")
             return
         }
         
-        agent.state = .walkingToPortal(projectId: task.project.id)
+        // 1. Move to Portal
+        await agent.commandMove(to: portal.position)
+        
         portal.showActivity()
         
-        await agent.moveTo(position: portal.position, duration: 1.0)
-        
-        agent.state = .enteringPortal
-        try? await Task.sleep(nanoseconds: 300_000_000)
-        
-        agent.state = .working(progress: 0.0)
+        // 2. Work
+        agent.stateMachine.enter(AgentWorkingState.self)
         
         do {
+            // Simulate "walking into" portal
+            agent.isHidden = true // Optional: hide agent while inside
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            
             let status = try await coordinator.executeTask(task)
             
-            agent.state = .working(progress: 1.0)
             try? await Task.sleep(nanoseconds: 200_000_000)
+            agent.isHidden = false
             
-            agent.state = .exitingPortal
             portal.hideActivity()
-            portal.updateStatus()
+            portal.applyStatus(status)
             
-            agent.state = .returningWithReport(status)
-            await agent.moveTo(position: deskNode.position, duration: 1.0)
+            // 3. Return to Desk
+            await agent.commandMove(to: deskNode.position)
             
-            agent.state = .presentingReport
-            
+            // 4. Present Report
             let report = ProjectReport(project: task.project, status: status)
             coordinator.addReport(report)
             reportBoard.showReport(report)
             
-            try? await Task.sleep(nanoseconds: 500_000_000)
+            // This state handles celebration/alert and auto-return to idle
+            // Hack: replace the state instance for this specific report
+            // GKStateMachine doesn't make swapping easy by default, but we can just use the node helper I'll add.
+            agent.commandPresent(report: report)
             
-            if status.hasUncommittedChanges {
-                agent.state = .alerting
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-            } else {
-                agent.state = .celebrating
-                try? await Task.sleep(nanoseconds: 1_000_000_000)
-            }
-            
-            agent.state = .idle
-            
+            // Trigger next task if any
             if !coordinator.taskQueue.isEmpty {
-                await processNextTask()
+                // Detach to allow recursion without stack depth issues
+                Task { await processNextTask() }
             }
             
         } catch {
             logger.error("Task execution failed: \(error.localizedDescription)")
-            agent.state = .idle
+            agent.isHidden = false
+            agent.stateMachine.enter(AgentIdleState.self)
             portal.hideActivity()
         }
     }
@@ -262,7 +290,8 @@ class OfficeScene: SKScene {
             debugOverlay.updateQueueLength(coordinator.taskQueue.count)
             
             for (index, agent) in agents.enumerated() {
-                debugOverlay.updateAgentState(index: index, state: agent.state)
+                let stateName = String(describing: type(of: agent.stateMachine.currentState!)).replacingOccurrences(of: "Agent", with: "").replacingOccurrences(of: "State", with: "")
+                debugOverlay.updateAgentState(index: index, stateDescription: stateName)
             }
         }
     }

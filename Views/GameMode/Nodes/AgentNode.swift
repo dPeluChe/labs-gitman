@@ -1,11 +1,13 @@
 import SpriteKit
+import GameplayKit
 
 class AgentNode: SKNode {
     var agentId: UUID
-    var state: AgentState = .idle {
-        didSet {
-            updateVisualState()
-        }
+    var stateMachine: GKStateMachine!
+    
+    // Helper to check if agent is free to take tasks
+    var isAvailable: Bool {
+        return stateMachine.currentState is AgentIdleState
     }
     
     private var bodyNode: SKShapeNode!
@@ -23,11 +25,21 @@ class AgentNode: SKNode {
         self.name = name
         self.position = position
         setupAgent(name: name)
-        playIdleAnimation()
+        setupStateMachine()
     }
     
     required init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+    
+    private func setupStateMachine() {
+        stateMachine = GKStateMachine(states: [
+            AgentIdleState(agentNode: self),
+            AgentWorkingState(agentNode: self),
+            AgentAlertState(agentNode: self)
+            // Moving/Presenting states are created dynamically as they need parameters
+        ])
+        stateMachine.enter(AgentIdleState.self)
     }
     
     private func setupAgent(name: String) {
@@ -65,7 +77,9 @@ class AgentNode: SKNode {
         addChild(nameLabel)
     }
     
-    private func playIdleAnimation() {
+    // MARK: - Animation Primitives (Called by States)
+    
+    func playIdleAnimation() {
         let bob = SKAction.sequence([
             SKAction.moveBy(x: 0, y: 3, duration: 0.6),
             SKAction.moveBy(x: 0, y: -3, duration: 0.6)
@@ -79,18 +93,21 @@ class AgentNode: SKNode {
         headNode.run(SKAction.repeatForever(headBob), withKey: "headIdle")
     }
     
-    private func stopIdleAnimation() {
+    func stopIdleAnimation() {
         bodyNode.removeAction(forKey: "idle")
         headNode.removeAction(forKey: "headIdle")
     }
     
-    func moveTo(position: CGPoint, duration: TimeInterval = 1.0) async {
-        stopIdleAnimation()
-        
-        let angle = atan2(position.y - self.position.y, position.x - self.position.x)
+    func performMove(to targetPos: CGPoint) async {
+        let angle = atan2(targetPos.y - self.position.y, targetPos.x - self.position.x)
         directionIndicator.zRotation = angle - .pi / 2
         
-        let moveAction = SKAction.move(to: position, duration: duration)
+        let distance = hypot(targetPos.x - self.position.x, targetPos.y - self.position.y)
+        let speed: CGFloat = 200.0 // pixels per second
+        let duration = TimeInterval(distance / speed)
+        
+        let moveAction = SKAction.move(to: targetPos, duration: duration)
+        // Linear usually looks better for isometric pathfinding, but EaseInEaseOut is ok for direct lines
         moveAction.timingMode = .easeInEaseOut
         
         let walkBob = SKAction.sequence([
@@ -102,16 +119,15 @@ class AgentNode: SKNode {
         await self.runAsync(moveAction)
         
         bodyNode.removeAction(forKey: "walk")
-        bodyNode.position = .zero
+        bodyNode.position = .zero // Reset bobbing offset
     }
     
-    func showWorkingState(progress: Float) {
-        progressBar?.removeFromParent()
-        
+    func startWorkingAnimation() {
+        // Show progress bar
         let bar = ShapeFactory.createProgressBar(
             width: 40,
             height: 6,
-            progress: progress,
+            progress: 0.0, // Indeterminate or starting at 0
             backgroundColor: NSColor(white: 0.3, alpha: 0.8),
             fillColor: NSColor(red: 0.3, green: 0.8, blue: 0.3, alpha: 1.0)
         )
@@ -119,11 +135,12 @@ class AgentNode: SKNode {
         addChild(bar)
         progressBar = bar
         
+        // Spin head or do something "busy"
         let spin = SKAction.rotate(byAngle: .pi * 2, duration: 1.0)
         headNode.run(SKAction.repeatForever(spin), withKey: "working")
     }
     
-    func hideWorkingState() {
+    func stopWorkingAnimation() {
         progressBar?.removeFromParent()
         progressBar = nil
         headNode.removeAction(forKey: "working")
@@ -171,24 +188,32 @@ class AgentNode: SKNode {
         ])
         warning.run(fadeOut)
     }
+    // MARK: - Command Methods (Bridge to State Machine)
     
-    private func updateVisualState() {
-        switch state {
-        case .idle:
-            hideWorkingState()
-            playIdleAnimation()
-        case .walkingToPortal:
-            hideWorkingState()
-        case .working(let progress):
-            showWorkingState(progress: progress)
-        case .celebrating:
-            hideWorkingState()
-            celebrate()
-        case .alerting:
-            hideWorkingState()
-            alert()
-        default:
-            break
+    func commandMove(to target: CGPoint) async {
+        await withCheckedContinuation { continuation in
+            let movingState = AgentMovingState(agentNode: self, target: target) {
+                continuation.resume()
+            }
+            // Manually rebuild the state machine to include the new dynamic state
+            self.stateMachine = GKStateMachine(states: [
+                movingState,
+                AgentIdleState(agentNode: self),
+                AgentWorkingState(agentNode: self),
+                AgentAlertState(agentNode: self)
+            ])
+            self.stateMachine.enter(AgentMovingState.self)
         }
+    }
+    
+    func commandPresent(report: ProjectReport) {
+        let presentingState = AgentPresentingState(agentNode: self, report: report)
+        self.stateMachine = GKStateMachine(states: [
+            presentingState,
+            AgentIdleState(agentNode: self),
+            AgentWorkingState(agentNode: self),
+            AgentAlertState(agentNode: self)
+        ])
+        self.stateMachine.enter(AgentPresentingState.self)
     }
 }

@@ -59,9 +59,9 @@ class DebugOverlayNode: SKNode {
         queueLabel.text = "Queue: \(length)"
     }
     
-    func updateAgentState(index: Int, state: AgentState) {
+    func updateAgentState(index: Int, stateDescription: String) {
         guard index < agentLabels.count else { return }
-        agentLabels[index].text = "Agent \(index + 1): \(state.description)"
+        agentLabels[index].text = "Agent \(index + 1): \(stateDescription)"
     }
     
     func showGrid(in scene: SKScene, grid: IsometricGrid, rows: Int, cols: Int) {

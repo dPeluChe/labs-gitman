@@ -524,20 +524,27 @@ actor ProcessExecutor {
         process.standardOutput = pipe
         process.standardError = pipe
 
-        do {
-            try process.run()
-            process.waitUntilExit()
-
-            let data = pipe.fileHandleForReading.readDataToEndOfFile()
-            let output = String(data: data, encoding: .utf8) ?? ""
-
-            if process.terminationStatus != 0 {
-                throw GitService.GitError.commandFailed(output)
+        return try await withCheckedThrowingContinuation { continuation in
+            // Move ALL blocking work to a background thread
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try process.run()
+                    
+                    // This blocks the background thread, which is fine
+                    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                    process.waitUntilExit()
+                    
+                    let output = String(data: data, encoding: .utf8) ?? ""
+                    
+                    if process.terminationStatus != 0 {
+                        continuation.resume(throwing: GitService.GitError.commandFailed(output))
+                    } else {
+                        continuation.resume(returning: output)
+                    }
+                } catch {
+                    continuation.resume(throwing: error)
+                }
             }
-
-            return output
-        } catch {
-            throw error
         }
     }
 }

@@ -109,26 +109,20 @@ Option 1 is cleaner for Game Mode because it returns a typed result for a single
 
 ## Agent State Machine
 
-### State model
-Design the state machine now, implement minimal visuals in MVP.
+### State model (Refactored)
+We use **GameplayKit's `GKStateMachine`** for robust state management.
+Classes defined in `Views/GameMode/States/AgentStates.swift`:
 
-Suggested states:
-```
-idle
-walkingToPortal(projectId)
-enteringPortal
-working(progress)
-exitingPortal
-returningWithReport(GitStatus)
-presentingReport
-celebrating (Phase 4)
-alerting (Phase 4)
-```
+- **`AgentIdleState`**: Agent is bobbing, waiting for commands.
+- **`AgentMovingState`**: Agent is travelling to a target (portal/desk).
+- **`AgentWorkingState`**: Agent is "inside" the portal (hidden/busy).
+- **`AgentPresentingState`**: Agent handles celebration or alerts based on report data.
+- **`AgentAlertState`**: Agent shows warning for uncommitted changes.
 
 ### Why it matters
-- Prevents invalid transitions.
-- Makes debug overlay meaningful.
-- Provides hooks for later polish (celebration/alert animations).
+- **Decoupling**: Visual logic (animations) is separated from decision logic.
+- **Scalability**: Easier to add new states (e.g., `AgentSleepingState`) without breaking existing code.
+- **Best Practice**: Standard pattern for SpriteKit games.
 
 ## Task Queue (MVP-ready)
 
@@ -144,7 +138,17 @@ alerting (Phase 4)
   - either allow duplicates (simple)
   - or dedupe by `projectId` (optional)
 
-## Reports
+## Threading & Performance
+
+### Critical: Non-blocking Git Operations
+Git operations (`git status`, `git log`) are synchronous and heavy.
+To prevent the main thread (UI) from freezing during scans:
+
+1. **ProcessExecutor**: Runs `Process` in a background `DispatchQueue`.
+2. **GameCoordinator**: Calls scanner methods inside `Task.detached`.
+3. **OfficeScene**: Only receives results via `MainActor` updates.
+
+This ensures the 60 FPS rendering loop is never blocked by file I/O.
 
 ### MVP
 - `maxVisibleReports = 1`

@@ -161,17 +161,85 @@ case .closePath:
 
 ---
 
+### 7. ✅ UI Freeze Fix (Deadlock en GitService) (CRÍTICO)
+**Problema**: La UI se congelaba (no permitía mover ventana) porque `readDataToEndOfFile` bloqueaba hilos del actor esperando salida del proceso, causando un deadlock con el Main Thread.
+
+**Fix Aplicado**:
+```swift
+// GitService.swift (ProcessExecutor)
+DispatchQueue.global(qos: .userInitiated).async {
+    try process.run()
+    let data = pipe.fileHandleForReading.readDataToEndOfFile() // Bloquea hilo background, no Actor
+    process.waitUntilExit()
+    // ...
+    continuation.resume(returning: output)
+}
+```
+
+**Resultado**: La UI permanece 100% fluida durante scans pesados de Git.
+
+---
+
+### 8. ✅ Agent Logic Refactor (GKStateMachine)
+**Problema**: La lógica del agente era un switch gigante en `AgentNode` y `OfficeScene`, difícil de mantener.
+
+**Fix Aplicado**: Implementación de **GameplayKit StateMachine**.
+- Nuevas clases en `AgentStates.swift`: `AgentIdleState`, `AgentMovingState`, etc.
+- `AgentNode` ahora delega comportamiento a estados.
+- `OfficeScene` usa comandos de alto nivel: `agent.commandMove(to:)`.
+
+**Resultado**: Código desacoplado, escalable y siguiendo mejores prácticas de desarrollo de juegos.
+
+---
+
+### 9. ✅ Smart Portal Sorting
+**Problema**: Los portales mostraban los primeros 6 proyectos alfabéticamente, ignorando los más recientes.
+
+**Fix Aplicado**:
+```swift
+// GameCoordinator.swift
+allGitRepos.sort { p1, p2 in
+    let date1 = getModificationDate(at: p1.path)
+    let date2 = getModificationDate(at: p2.path)
+    return date1 > date2
+}
+```
+
+**Resultado**: Los portales ahora muestran los 6 proyectos en los que estás trabajando activamente.
+
+---
+
+### 10. ✅ Detailed File List in Reports
+**Problema**: El reporte solo decía "X uncommitted changes" sin detalles.
+
+**Fix Aplicado**:
+```swift
+// OfficeScene.swift
+let allFiles = (
+    staged.map { "✅ \($0)" } +
+    modified.map { "📝 \($0)" } +
+    untracked.map { "❓ \($0)" }
+)
+// Muestra primeros 10 archivos en el Alert
+```
+
+**Resultado**: Al hacer click en el reporte, ves exactamente qué archivos cambiaste.
+
+---
+
 ## 📊 Resumen de Cambios
 
 | Archivo | Cambios | Líneas |
 |---------|---------|--------|
 | `GameConstants.swift` | ✨ Nuevo archivo | +63 |
-| `GameCoordinator.swift` | Race condition fix | +2 |
-| `OfficeScene.swift` | Portal refresh + tap handler + constants | +25 |
+| `GameCoordinator.swift` | Race condition fix + Sorting | +20 |
+| `OfficeScene.swift` | Portal refresh + tap handler + constants | +40 |
 | `GameModeView.swift` | Auto-refresh portals | +4 |
 | `ChangeDetector.swift` | Warning fix | -1 |
 | `ShapeFactory.swift` | Exhaustive switch | +4 |
-| **TOTAL** | | **+97 líneas** |
+| `GitService.swift` | Thread-safe Executor | +15 |
+| `AgentStates.swift` | GKStateMachine classes | +120 |
+| **TOTAL** | | **+265 líneas** |
 
 ---
 
@@ -179,7 +247,7 @@ case .closePath:
 
 ```bash
 swift build
-# Build complete! (3.14s)
+# Build complete! (2.63s)
 # 0 errors, 0 warnings
 ```
 

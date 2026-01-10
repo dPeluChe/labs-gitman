@@ -192,6 +192,27 @@ class ProjectScannerViewModel: ObservableObject {
     }
     
     // MARK: - Status Refresh Methods
+
+    /// Fetch a full GitStatus for a project (throws on failure).
+    /// Used by Game Mode so it can update its own project list by path.
+    func fetchStatus(for project: Project) async throws -> GitStatus {
+        try await gitService.getStatus(for: project)
+    }
+
+    /// Apply a GitStatus to the project hierarchy by matching path.
+    /// Safe no-op if the path is not currently present in `projects`.
+    func applyStatus(forPath path: String, status: GitStatus) {
+        func findId(in projects: [Project]) -> UUID? {
+            for p in projects {
+                if p.path == path { return p.id }
+                if let found = findId(in: p.subProjects) { return found }
+            }
+            return nil
+        }
+
+        guard let projectId = findId(in: projects) else { return }
+        updateProjectStatus(projectId: projectId, status: status)
+    }
     
     /// Light refresh: Minimal git commands (3) with cached data reuse
     func lightRefreshProjectStatus(_ project: Project) async {

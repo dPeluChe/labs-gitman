@@ -1,9 +1,9 @@
 # Game Mode: Implementation Status
 
 **Date**: 2026-01-09  
-**Status**: ✅ **MVP COMPLETE & BUILDING**  
-**Build**: Successful (warnings only)  
-**Phase**: 0-2 Complete, Ready for Testing
+**Status**: ✅ **MVP POLISHED & STABLE**  
+**Build**: Successful (0 errors)  
+**Phase**: 0-2 Complete, Optimizations Applied
 
 ---
 
@@ -14,8 +14,8 @@
 Game Mode is a **fully functional 2.5D isometric office interface** where agents (workers) travel to project portals, execute Git status checks, and return with visual reports.
 
 **Total Implementation**:
-- **15 new files** created
-- **~1,800 lines** of Swift code
+- **16 new files** created
+- **~1,900 lines** of Swift code
 - **Full integration** with existing GitMonitor architecture
 - **Zero breaking changes** to traditional UI
 
@@ -24,9 +24,10 @@ Game Mode is a **fully functional 2.5D isometric office interface** where agents
 ## ✅ Completed Features (Phases 0-2)
 
 ### Core Architecture
-- ✅ **Models**: AgentState, AgentTask, ProjectReport
+- ✅ **Models**: AgentTask, ProjectReport
+- ✅ **States**: GKStateMachine implementation (AgentStates.swift)
 - ✅ **Utils**: SKNode+Async, ShapeFactory (geometric primitives)
-- ✅ **Coordinator**: GameCoordinator with task queue
+- ✅ **Coordinator**: GameCoordinator with task queue & concurrency fixes
 - ✅ **Scene Store**: Persistent scene lifecycle management
 - ✅ **View**: SwiftUI wrapper with controls
 
@@ -34,7 +35,7 @@ Game Mode is a **fully functional 2.5D isometric office interface** where agents
 - ✅ **Isometric Office**: 8x8 tile floor with depth sorting
 - ✅ **Manager Desk**: Central control point
 - ✅ **2 Agents**: Different colors (coral, blue) with personalities
-- ✅ **Project Portals**: Up to 6 visible, color-coded by status
+- ✅ **Project Portals**: Up to 6 visible, **sorted by modification date**
 - ✅ **Report Board**: Animated report cards with project info
 
 ### Animations
@@ -49,10 +50,10 @@ Game Mode is a **fully functional 2.5D isometric office interface** where agents
 ### Workflow
 - ✅ **Click Portal** → Agent dispatched
 - ✅ **Task Queue** → FIFO processing
-- ✅ **Git Integration** → Calls `ProjectScannerViewModel.fullRefreshProjectStatus()`
+- ✅ **Git Integration** → Calls `ProjectScannerViewModel` (Non-blocking)
 - ✅ **Status Update** → Portal indicators refresh
 - ✅ **Report Display** → Card with branch, changes, status
-- ✅ **Multiple Tasks** → Queue and process sequentially
+- ✅ **Detailed Alert** → Click report to see list of modified files
 
 ### Debug Features
 - ✅ **Debug Overlay** → Toggle with 'P' key
@@ -75,19 +76,20 @@ Game Mode is a **fully functional 2.5D isometric office interface** where agents
 Views/GameMode/
 ├── Core/
 │   ├── GameModeView.swift           ✅ 95 lines
-│   ├── GameCoordinator.swift        ✅ 68 lines
+│   ├── GameCoordinator.swift        ✅ 85 lines
 │   └── GameSceneStore.swift         ✅ 11 lines
 ├── Scene/
-│   ├── OfficeScene.swift            ✅ 235 lines
+│   ├── OfficeScene.swift            ✅ 250 lines
 │   ├── IsometricGrid.swift          ✅ 28 lines
 │   └── DebugOverlayNode.swift       ✅ 102 lines
 ├── Nodes/
-│   ├── AgentNode.swift              ✅ 178 lines
+│   ├── AgentNode.swift              ✅ 190 lines
 │   ├── ProjectPortalNode.swift      ✅ 135 lines
 │   ├── DeskNode.swift               ✅ 38 lines
 │   └── ReportBoardNode.swift        ✅ 155 lines
+├── States/
+│   └── AgentStates.swift            ✅ 120 lines (GKState classes)
 ├── Models/
-│   ├── AgentState.swift             ✅ 42 lines
 │   ├── AgentTask.swift              ✅ 17 lines
 │   └── ProjectReport.swift          ✅ 26 lines
 └── Utils/
@@ -96,6 +98,7 @@ Views/GameMode/
 ```
 
 **Modified Files**:
+- `Services/GitService.swift` → ProcessExecutor refactor (Thread-safe)
 - `Views/ProjectListView.swift` → Added Game Mode toggle
 - `Package.swift` → No changes needed (Views/ auto-includes subdirs)
 
@@ -124,25 +127,19 @@ Views/GameMode/
 
 ## 🔧 Technical Highlights
 
-### State Machine
-```swift
-enum AgentState {
-    case idle
-    case walkingToPortal(projectId: UUID)
-    case enteringPortal
-    case working(progress: Float)
-    case exitingPortal
-    case returningWithReport(GitStatus)
-    case presentingReport
-    case celebrating
-    case alerting
-}
-```
+### State Machine (Refactored)
+Now using Apple's **GameplayKit (GKStateMachine)** for robust logic:
+- `AgentIdleState`
+- `AgentMovingState`
+- `AgentWorkingState`
+- `AgentPresentingState`
+- `AgentAlertState`
 
-### Async/Await Integration
-- Custom `SKNode.runAsync()` extension
-- Proper continuation handling for SpriteKit actions
-- Non-blocking Git operations
+### Concurrency & Performance
+- **Non-blocking Git**: `ProcessExecutor` runs on background queue
+- **Task Detachment**: `Task.detached` prevents Main Thread freezes
+- **Smart Sorting**: Portals show most recently modified projects
+- **Async/Await**: Custom `SKNode.runAsync()` extension
 
 ### macOS-Correct Input
 - `mouseDown(with:)` for portal clicks
@@ -159,7 +156,7 @@ enum AgentState {
 
 ## ⚠️ Known Limitations (MVP)
 
-1. **Portal Limit**: Only first 6 Git repos shown
+1. **Portal Limit**: Only first 6 *most recent* Git repos shown
 2. **Single Report**: One visible report at a time
 3. **No Camera Controls**: Fixed view (zoom/pan in Phase 3)
 4. **Basic Pathfinding**: Straight-line movement
@@ -172,17 +169,16 @@ enum AgentState {
 
 ### Build Status
 - ✅ **Compiles Successfully**
-- ⚠️ 1 warning (exhaustive switch in ShapeFactory - non-critical)
 - ✅ No errors
 - ✅ All dependencies resolved
 
-### Manual Testing Required
-- ⏳ Launch app and toggle Game Mode
-- ⏳ Click portal and verify agent workflow
-- ⏳ Verify Git status integration
-- ⏳ Test task queue with multiple clicks
-- ⏳ Verify debug overlay (P key)
-- ⏳ Test switching back to traditional UI
+### Manual Testing Confirmed
+- ✅ Launch app and toggle Game Mode
+- ✅ Click portal and verify agent workflow
+- ✅ Verify Git status integration (NO UI FREEZE)
+- ✅ Test task queue with multiple clicks
+- ✅ Verify debug overlay (P key)
+- ✅ Verify Detailed Report Alert
 
 ### Performance Testing Required
 - ⏳ FPS monitoring (target: 60 FPS)
@@ -221,9 +217,9 @@ enum AgentState {
 ## 📊 Metrics
 
 ### Code Statistics
-- **Total Lines**: ~1,800
-- **Files Created**: 15
-- **Files Modified**: 1
+- **Total Lines**: ~1,900
+- **Files Created**: 16
+- **Files Modified**: 2
 - **Build Time**: ~5 seconds
 - **Warnings**: 1 (non-critical)
 - **Errors**: 0
@@ -237,8 +233,8 @@ enum AgentState {
 
 ### Architecture Quality
 - ✅ MVVM pattern maintained
-- ✅ No breaking changes
-- ✅ Proper separation of concerns
+- ✅ GKStateMachine implemented
+- ✅ Thread-safe Git Service
 - ✅ Reusable components
 - ✅ macOS-native implementation
 
@@ -248,17 +244,16 @@ enum AgentState {
 
 ### What Worked Well
 1. **Geometry-first approach** → Fast iteration without assets
-2. **State machine** → Clean agent behavior management
+2. **GKStateMachine** → Much cleaner than Enums for complex behavior
 3. **Hybrid mode** → No risk to existing UI
 4. **Persistent scene** → Stable lifecycle
-5. **Task queue** → Handles multiple requests elegantly
+5. **DispatchQueue for Process** → Solved critical UI freeze
 
 ### Challenges Solved
-1. **SwiftUI + SpriteKit integration** → GameSceneStore pattern
-2. **Async SpriteKit actions** → Custom continuation wrapper
-3. **macOS events** → Proper NSEvent handling (not UITouch)
-4. **Optional unwrapping** → NSColor.blended() returns optional
-5. **Scene recreation** → @StateObject prevents flicker
+1. **UI Freeze** → Moved blocking IO to background queue
+2. **SwiftUI + SpriteKit integration** → GameSceneStore pattern
+3. **Async SpriteKit actions** → Custom continuation wrapper
+4. **Agent Logic** → Refactored from giant switch to State classes
 
 ---
 
@@ -269,16 +264,17 @@ enum AgentState {
 - ✅ `TASKS.md` - Tracking progress
 - ✅ `IMPLEMENTATION_STATUS.md` - This file
 - ✅ `README.md` - Quick start guide
+- ✅ `FIXES_APPLIED.md` - Log of critical fixes
 
 ---
 
 ## 🎉 Conclusion
 
-**Game Mode MVP is COMPLETE and READY FOR TESTING.**
+**Game Mode MVP is POLISHED and READY.**
 
-The implementation successfully transforms GitMonitor into a playful 2.5D office where Git monitoring becomes a visual, spatial experience. All core features are functional, the build is clean, and the architecture is solid.
+The implementation has been hardened against concurrency issues and refactored for maintainability.
 
-**Ready to ship Phase 0-2. Phase 3-4 enhancements can be added iteratively.**
+**Ready to ship Phase 0-2.**
 
 ---
 
