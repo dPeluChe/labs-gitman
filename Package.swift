@@ -23,7 +23,9 @@ let package = Package(
                 "docs",
                 "Tests",
                 "Resources/Info.plist",
-                "app_icon_source.png"
+                "app_icon_source.png",
+                "CLAUDE.md",
+                "convert_glb_to_dae.py"
             ],
             sources: [
                 "Models",
@@ -33,7 +35,8 @@ let package = Package(
                 "GitMonitorApp.swift"
             ],
             resources: [
-                .process("Resources/Asset.xcassets")
+                .process("Resources/Asset.xcassets"),
+                .process("Resources/3DAssets")
             ],
             swiftSettings: [
                 .unsafeFlags(["-parse-as-library"])

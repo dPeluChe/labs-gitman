@@ -24,14 +24,14 @@ struct IsometricGrid {
     }
     
     func zPosition(for logicalY: Int) -> CGFloat {
-        // Not used often, but logical Y also goes "away" usually? 
-        // Let's rely on screenY mainly.
-        return -CGFloat(logicalY) * 10
+        return -CGFloat(logicalY) * tileHeight
     }
     
     func zPosition(for screenY: CGFloat) -> CGFloat {
-        // Crucial for depth sorting:
-        // Lower Y (bottom of screen) = Closer to camera = Higher Z
         return -screenY
+    }
+
+    func zPosition(for screenY: CGFloat, modelHeight: CGFloat) -> CGFloat {
+        return -screenY - modelHeight / 2
     }
 }

@@ -36,7 +36,7 @@ struct GameModeView: View {
 
                     Button(action: {
                         Task {
-                            await coordinator.discoverProjectsForGameMode()
+                            await coordinator.refreshProjects()
                             sceneStore.scene.refreshPortals()
                         }
                     }) {
@@ -86,12 +86,8 @@ struct GameModeView: View {
         }
         .onAppear {
             sceneStore.scene.coordinator = coordinator
-            
-            // Fast discovery: Show portals INSTANTLY without git commands
-            Task {
-                await coordinator.discoverProjectsForGameMode()
-                sceneStore.scene.refreshPortals()
-            }
+            // Note: Portals are automatically created in didMove(to:)
+            // They are auto-synced with ProjectScannerViewModel via GameCoordinator
         }
         .onDisappear {
             coordinator.stopAutoPlay()

@@ -11,48 +11,65 @@ class GameCoordinator: ObservableObject {
     @Published var isProcessing: Bool = false
     @Published var debugMode: Bool = false
     @Published var isDiscovering: Bool = false
-    
+
     private let scannerViewModel: ProjectScannerViewModel
-    private let configStore = ConfigStore()
     private let logger = Logger(subsystem: "com.gitmonitor", category: "GameCoordinator")
-    
+
     var maxVisibleReports: Int = 1
-    
+
     private var cancellables = Set<AnyCancellable>()
-    
+
     init(scannerViewModel: ProjectScannerViewModel) {
         self.scannerViewModel = scannerViewModel
+
+        // Sync projects from ProjectScannerViewModel automatically
+        scannerViewModel.$projects
+            .map { rootProjects in
+                // Flatten to get all git repos (including nested ones)
+                var allGitRepos: [Project] = []
+                for root in rootProjects {
+                    if root.isGitRepository {
+                        allGitRepos.append(root)
+                    }
+                    allGitRepos.append(contentsOf: self.flattenGitRepos(root.subProjects))
+                }
+
+                // Sort by modification date (newest first) to show most relevant portals
+                return allGitRepos.sorted { p1, p2 in
+                    let date1 = self.getModificationDate(at: p1.path)
+                    let date2 = self.getModificationDate(at: p2.path)
+                    return date1 > date2
+                }
+            }
+            .assign(to: &$projects)
+
+        logger.info("🎮 GameCoordinator initialized with shared projects from ProjectScannerViewModel")
+    }
+
+    /// Recursively flatten all git repos from project tree
+    private func flattenGitRepos(_ projects: [Project]) -> [Project] {
+        var result: [Project] = []
+        for project in projects {
+            if project.isGitRepository {
+                result.append(project)
+            }
+            result.append(contentsOf: flattenGitRepos(project.subProjects))
+        }
+        return result
     }
     
-    /// Fast discovery: Load project structure WITHOUT executing git commands
-    /// This makes portals appear instantly in Game Mode
-    func discoverProjectsForGameMode() async {
+    /// Refresh projects by triggering a scan in ProjectScannerViewModel
+    /// Projects will be automatically synced via Combine publisher
+    func refreshProjects() async {
         isDiscovering = true
-        logger.info("🎮 Starting fast discovery for Game Mode...")
+        logger.info("🎮 Refreshing projects via ProjectScannerViewModel...")
         defer { isDiscovering = false }
 
-        // ConfigStore.discoverProjects now runs in a detached task internally,
-        // so it won't block the Main Thread even if called here.
-        let discovered = await configStore.discoverProjects()
-        
-        // Flatten to get all git repos (including nested ones)
-        var allGitRepos: [Project] = []
-        for root in discovered {
-            if root.isGitRepository {
-                allGitRepos.append(root)
-            }
-            allGitRepos.append(contentsOf: root.subProjects.filter { $0.isGitRepository })
-        }
-        
-        // Sort by modification date (newest first) to show most relevant portals
-        allGitRepos.sort { p1, p2 in
-            let date1 = getModificationDate(at: p1.path)
-            let date2 = getModificationDate(at: p2.path)
-            return date1 > date2
-        }
-        
-        projects = allGitRepos
-        logger.info("🎮 Fast discovery complete: \(allGitRepos.count) git repos ready for portals")
+        // Trigger scan in the shared ViewModel
+        // Projects will be automatically updated via Combine subscription
+        await scannerViewModel.scanAllProjects()
+
+        logger.info("🎮 Refresh complete: \(self.projects.count) git repos ready for portals")
     }
     
     private func getModificationDate(at path: String) -> Date {

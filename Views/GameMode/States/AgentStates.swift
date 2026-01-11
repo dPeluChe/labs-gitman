@@ -1,11 +1,27 @@
 import SpriteKit
 import GameplayKit
 
+// MARK: - Agent Protocol
+protocol AgentNodeProtocol: AnyObject {
+    var position: CGPoint { get set }
+    var stateMachine: GKStateMachine! { get set }
+    var isReserved: Bool { get set }
+    var name: String? { get }
+
+    func playIdleAnimation()
+    func stopIdleAnimation()
+    func performMove(to targetPos: CGPoint) async
+    func startWorkingAnimation()
+    func stopWorkingAnimation()
+    func celebrate()
+    func alert()
+}
+
 // MARK: - Base State
 class AgentBaseState: GKState {
-    unowned let agentNode: AgentNode
-    
-    init(agentNode: AgentNode) {
+    unowned let agentNode: AgentNodeProtocol
+
+    init(agentNode: AgentNodeProtocol) {
         self.agentNode = agentNode
         super.init()
     }
@@ -30,8 +46,8 @@ class AgentIdleState: AgentBaseState {
 class AgentMovingState: AgentBaseState {
     let targetPosition: CGPoint
     let completion: () -> Void
-    
-    init(agentNode: AgentNode, target: CGPoint, completion: @escaping () -> Void = {}) {
+
+    init(agentNode: AgentNodeProtocol, target: CGPoint, completion: @escaping () -> Void = {}) {
         self.targetPosition = target
         self.completion = completion
         super.init(agentNode: agentNode)
@@ -70,8 +86,8 @@ class AgentWorkingState: AgentBaseState {
 // MARK: - Presenting State (Report)
 class AgentPresentingState: AgentBaseState {
     let report: ProjectReport
-    
-    init(agentNode: AgentNode, report: ProjectReport) {
+
+    init(agentNode: AgentNodeProtocol, report: ProjectReport) {
         self.report = report
         super.init(agentNode: agentNode)
     }
@@ -85,9 +101,7 @@ class AgentPresentingState: AgentBaseState {
              // Auto transition back to idle after celebration
              Task {
                  try? await Task.sleep(nanoseconds: 2_000_000_000)
-                 await MainActor.run {
-                     agentNode.stateMachine.enter(AgentIdleState.self)
-                 }
+                 agentNode.stateMachine.enter(AgentIdleState.self)
              }
         }
     }
@@ -99,9 +113,7 @@ class AgentAlertState: AgentBaseState {
         agentNode.alert()
         Task {
             try? await Task.sleep(nanoseconds: 2_000_000_000)
-            await MainActor.run {
-                agentNode.stateMachine.enter(AgentIdleState.self)
-            }
+            agentNode.stateMachine.enter(AgentIdleState.self)
         }
     }
     

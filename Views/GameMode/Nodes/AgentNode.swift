@@ -1,7 +1,7 @@
 import SpriteKit
 import GameplayKit
 
-class AgentNode: SKNode {
+class AgentNode: SKNode, AgentNodeProtocol {
     var agentId: UUID
     var stateMachine: GKStateMachine!
     

@@ -1,6 +1,7 @@
 import SpriteKit
 import OSLog
 import AppKit
+import Combine
 
 class OfficeScene: SKScene {
     weak var coordinator: GameCoordinator?
@@ -17,12 +18,14 @@ class OfficeScene: SKScene {
     private var reportBoard: ReportBoardNode!
     private var debugOverlay: DebugOverlayNode!
     
-    private var agents: [AgentNode] = []
+    private var agents: [Agent3DNode] = []
     private var portals: [ProjectPortalNode] = []
 
     private var isProcessingQueue: Bool = false
-    private var selectedAgent: AgentNode? // For manual control
-    
+    private var selectedAgent: Agent3DNode? // For manual control
+
+    private var projectsObserver: AnyCancellable?
+
     private var lastUpdateTime: TimeInterval = 0
     private var frameCount: Int = 0
     private var fps: Int = 0
@@ -43,13 +46,25 @@ class OfficeScene: SKScene {
         worldNode = SKNode()
         worldNode.position = CGPoint(x: size.width/2, y: size.height/2)
         addChild(worldNode)
-        
+
         setupOffice()
         setupDesk()
         setupAgents()
         setupReportBoard() // HUD - attached to self
         setupDebugOverlay() // HUD - attached to self
         setupProjectPortals()
+        setupProjectsObserver()
+    }
+
+    private func setupProjectsObserver() {
+        guard let coordinator = coordinator else { return }
+
+        // Observe changes to projects and auto-refresh portals
+        projectsObserver = coordinator.$projects
+            .dropFirst() // Skip initial value (already handled by setupProjectPortals)
+            .sink { [weak self] _ in
+                self?.refreshPortals()
+            }
     }
     
     private func setupOffice() {
@@ -96,22 +111,23 @@ class OfficeScene: SKScene {
     private func setupAgents() {
         let a1 = GameConstants.Colors.agent1
         let a2 = GameConstants.Colors.agent2
-        
+
         // Spawn agents at specific logical tiles (Side areas)
-        let agentConfigs: [(name: String, color: NSColor, startX: Int, startY: Int)] = [
-            ("Agent 1", NSColor(red: a1.r, green: a1.g, blue: a1.b, alpha: a1.a), 3, -3),
-            ("Agent 2", NSColor(red: a2.r, green: a2.g, blue: a2.b, alpha: a2.a), -3, -3)
+        let agentConfigs: [(name: String, color: NSColor, startX: Int, startY: Int, model: String?)] = [
+            ("Rubber Duck", NSColor(red: a1.r, green: a1.g, blue: a1.b, alpha: a1.a), 3, -3, "Rubber_Duck"),
+            ("Chicken Guy", NSColor(red: a2.r, green: a2.g, blue: a2.b, alpha: a2.a), -3, -3, "Chicken_Guy")
         ]
-        
+
         for config in agentConfigs {
             let agentPos = grid.logicalToScreen(x: config.startX, y: config.startY)
-            let agent = AgentNode(
+            let agent = Agent3DNode(
                 id: UUID(),
                 name: config.name,
                 color: config.color,
-                position: agentPos
+                position: agentPos,
+                modelName: config.model
             )
-            agent.zPosition = grid.zPosition(for: agentPos.y)
+            agent.zPosition = grid.zPosition(for: agentPos.y, modelHeight: 40)
             worldNode.addChild(agent)
             agents.append(agent)
         }
@@ -195,7 +211,7 @@ class OfficeScene: SKScene {
         for node in clickedNodes {
             var candidate = node
             while let parent = candidate.parent, candidate != worldNode {
-                if let agent = candidate as? AgentNode {
+                if let agent = candidate as? Agent3DNode {
                     selectAgent(agent)
                     agentClicked = true
                     break
@@ -212,7 +228,7 @@ class OfficeScene: SKScene {
         moveSelectedAgent(to: (logX, logY))
     }
     
-    private func selectAgent(_ agent: AgentNode) {
+    private func selectAgent(_ agent: Agent3DNode) {
         if let previous = selectedAgent {
             previous.setSelected(false)
         }
@@ -293,7 +309,7 @@ class OfficeScene: SKScene {
         }
     }
     
-    private func performTask(agent: AgentNode, task: AgentTask, portal: ProjectPortalNode) async {
+    private func performTask(agent: Agent3DNode, task: AgentTask, portal: ProjectPortalNode) async {
         // 1. Move
         await agent.commandMove(to: portal.position)
         
@@ -376,7 +392,7 @@ class OfficeScene: SKScene {
         if let coordinator = coordinator {
             debugOverlay.updateQueueLength(coordinator.taskQueue.count)
             for (index, agent) in agents.enumerated() {
-                agent.zPosition = grid.zPosition(for: agent.position.y)
+                agent.zPosition = grid.zPosition(for: agent.position.y, modelHeight: 40)
                 let stateName = String(describing: type(of: agent.stateMachine.currentState!))
                     .replacingOccurrences(of: "Agent", with: "")
                     .replacingOccurrences(of: "State", with: "")
@@ -397,6 +413,17 @@ class OfficeScene: SKScene {
     }
     
     func refreshPortals() {
+        // Check if scene is initialized
+        guard worldNode != nil else {
+            logger.warning("⚠️ refreshPortals() called before didMove(to:) - will be setup automatically")
+            return
+        }
+
+        // Remove old portals
+        portals.forEach { $0.removeFromParent() }
+        portals.removeAll()
+
+        // Recreate with current projects from coordinator
         setupProjectPortals()
     }
 }
